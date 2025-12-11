@@ -3,6 +3,8 @@ import { NestFactory } from '@nestjs/core';
 import { AppModule } from './app.module';
 import { ValidationPipe } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import { RequestLoggingInterceptor } from './common/logging.interceptor'; 
+import { HttpExceptionFilter } from './common/http-exception.filter'; 
 
 async function bootstrap() {
   const app = await NestFactory.create(AppModule, {
@@ -17,7 +19,9 @@ async function bootstrap() {
       transform: true, // 自动类型转换（字符串 -> number 等）
     }),
   );
-
+  app.useGlobalInterceptors(new RequestLoggingInterceptor());
+  
+  app.useGlobalFilters(new HttpExceptionFilter());  // ✅ 全局异常过滤器
   // 从 ConfigService 读取 BACKEND_PORT（由 apps/backend/.env 提供）
   const configService = app.get(ConfigService);
   const port = configService.get<number>('BACKEND_PORT') ?? 4000;
