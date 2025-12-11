@@ -1,7 +1,7 @@
 // apps/backend/src/health/health.controller.ts
 import { Controller, Get, BadRequestException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { DbService } from '../db/db.module';
+import { DbService } from '../db/db.service';
 import { users } from '../db/schema';
 
 @Controller()

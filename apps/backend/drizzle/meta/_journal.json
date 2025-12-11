@@ -8,6 +8,13 @@
       "when": 1765411007640,
       "tag": "0000_fresh_vargas",
       "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "7",
+      "when": 1765473660719,
+      "tag": "0001_mean_impossible_man",
+      "breakpoints": true
     }
   ]
 }

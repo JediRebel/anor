@@ -26,6 +26,12 @@ async function bootstrap() {
   const configService = app.get(ConfigService);
   const port = configService.get<number>('BACKEND_PORT') ?? 4000;
 
+  // 这里开启 CORS，允许前端开发地址访问
+  app.enableCors({
+    origin: 'http://localhost:3100', // 前端 dev 的地址
+    credentials: true,
+  });
+
   await app.listen(port);
   console.log(`Backend is running on http://localhost:${port}`);
 }

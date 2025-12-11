@@ -5,6 +5,7 @@ import { AppController } from './app.controller';
 import { AppService } from './app.service';
 import { HealthModule } from './health/health.module'; // ✅ 预留（下一步会创建这个文件）
 import { DbModule } from './db/db.module'; // ✅ 新增
+import { AuthModule } from './modules/auth/auth.module';
 
 @Module({
   imports: [
@@ -14,6 +15,7 @@ import { DbModule } from './db/db.module'; // ✅ 新增
     }),
     DbModule,     
     HealthModule,
+    AuthModule,
   ],
   controllers: [AppController],
   providers: [AppService],
