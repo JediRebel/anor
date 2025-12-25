@@ -2,9 +2,10 @@ node_modules
 dist
 .next
 .out
-
+.turbo
 .env
 .env.local
 
 .DS_Store
 *.log
+http-test.http

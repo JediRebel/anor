@@ -15,6 +15,13 @@
       "when": 1765473660719,
       "tag": "0001_mean_impossible_man",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1766345903226,
+      "tag": "0002_low_black_tarantula",
+      "breakpoints": true
     }
   ]
 }

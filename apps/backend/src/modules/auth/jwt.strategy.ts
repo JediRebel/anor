@@ -4,12 +4,12 @@ import { ConfigService } from '@nestjs/config';
 import { PassportStrategy } from '@nestjs/passport';
 import { ExtractJwt, Strategy } from 'passport-jwt';
 
-import { UserRole } from '../../db/schema/users';
+import { DbUserRole } from '../../db/schema/users';
 
 export interface JwtPayload {
   sub: number;
   email: string;
-  role: UserRole;
+  role: DbUserRole;
 }
 
 @Injectable()
