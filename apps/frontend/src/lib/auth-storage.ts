@@ -8,82 +8,104 @@ export type AuthUser = {
 
 export interface StoredAuth {
   user: AuthUser;
-  accessToken: string;
-  refreshToken: string;
-  accessTokenExpiresAt?: number; // 先预留，将来需要可以填
-  refreshTokenExpiresAt?: number; // 先预留，将来需要可以填
+  /**
+   * Indicates this payload is derived from cookie session.
+   * Kept only to avoid breaking old imports.
+   */
+  mode?: 'cookie';
 }
 
-// 以后只用这一个 key 存所有登录信息
-const AUTH_KEY = 'anor_auth';
+// ================================
+// NOTE:
+// This project uses httpOnly-cookie session auth.
+// The browser should not rely on any client-side credential storage.
+// Cookie session (GET /auth/me with credentials) is the source of truth.
+// ================================
+
+// 注意：用 || 而不是 ??，避免 env 存在但为空字符串导致 baseUrl 变成 ''
+const API_BASE = (process.env.NEXT_PUBLIC_API_BASE_URL || 'http://localhost:3001').replace(
+  /\/+$/,
+  '',
+);
 
 /**
- * 保存登录信息到 localStorage
- * - data 至少要包含 user / accessToken / refreshToken
+ * Legacy: previously persisted auth data on the client.
+ * Disabled under cookie-session auth.
  */
-export function saveAuth(data: StoredAuth) {
-  if (typeof window === 'undefined') return;
-
-  const payload: StoredAuth = {
-    user: data.user,
-    accessToken: data.accessToken,
-    refreshToken: data.refreshToken,
-    accessTokenExpiresAt: data.accessTokenExpiresAt,
-    refreshTokenExpiresAt: data.refreshTokenExpiresAt,
-  };
-
-  window.localStorage.setItem(AUTH_KEY, JSON.stringify(payload));
+export function saveAuth(_data: StoredAuth) {
+  // no-op under cookie auth
+  return;
 }
 
 /**
- * 读取完整的登录信息（可能为 null）
+ * Legacy: previously read client-side auth data.
+ * Disabled under cookie-session auth.
  */
 export function getAuth(): StoredAuth | null {
+  return null;
+}
+
+export function getCurrentUser(): AuthUser | null {
+  return null;
+}
+
+/**
+ * Legacy export retained for compatibility.
+ * Not supported with httpOnly cookie sessions; always returns false.
+ */
+export function isAuthenticated(): boolean {
+  return false;
+}
+
+/**
+ * Legacy export retained for compatibility.
+ * Under cookie-session auth, sign-out is performed via POST /auth/logout.
+ */
+export function clearAuth() {
+  // no-op
+  return;
+}
+
+/**
+ * Source of truth: GET /auth/me (httpOnly-cookie session).
+ * - returns null for not-logged-in / session invalid / request failed
+ * - browser-side only
+ */
+export async function fetchCurrentUserFromCookie(): Promise<AuthUser | null> {
   if (typeof window === 'undefined') return null;
-  const raw = window.localStorage.getItem(AUTH_KEY);
-  if (!raw) return null;
+
+  const baseUrl = API_BASE;
 
   try {
-    const parsed = JSON.parse(raw) as StoredAuth;
+    const res = await fetch(`${baseUrl}/auth/me`, {
+      method: 'GET',
+      credentials: 'include',
+      cache: 'no-store',
+    });
 
-    if (!parsed.user || !parsed.accessToken) {
-      return null;
-    }
+    if (!res.ok) return null;
 
-    return parsed;
+    const data = (await res.json()) as any;
+    if (!data || typeof data !== 'object') return null;
+
+    const user: AuthUser = {
+      id: typeof data.id === 'number' ? data.id : Number(data.id),
+      email: String(data.email ?? ''),
+      role: String(data.role ?? ''),
+    };
+
+    if (!user.id || !user.email) return null;
+
+    return user;
   } catch {
     return null;
   }
 }
 
 /**
- * 读取当前 access token
+ * Based on cookie session: whether user is admin.
  */
-export function getAccessToken(): string | null {
-  const auth = getAuth();
-  return auth?.accessToken ?? null;
-}
-
-/**
- * 读取当前登录用户信息
- */
-export function getCurrentUser(): AuthUser | null {
-  const auth = getAuth();
-  return auth?.user ?? null;
-}
-
-/**
- * 是否“看起来已登录”（这里只看本地有没有 token，不判断是否过期）
- */
-export function isAuthenticated(): boolean {
-  const auth = getAuth();
-  return !!auth?.accessToken;
-}
-
-/**
- * 退出登录：清空本地所有登录信息
- */
-export function clearAuth() {
-  if (typeof window === 'undefined') return;
-  window.localStorage.removeItem(AUTH_KEY);
+export async function isAdminFromCookie(): Promise<boolean> {
+  const user = await fetchCurrentUserFromCookie();
+  return user?.role === 'admin';
 }

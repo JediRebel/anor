@@ -1,18 +1,14 @@
 // apps/frontend/src/app/login/page.tsx
 'use client';
 
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
+import Link from 'next/link';
 import { apiClient, ApiError } from '@/lib/api-client';
 import type { AuthUser } from '@/lib/api/auth';
-import { saveAuthFromLoginResult } from '@/lib/auth/client-auth';
 
 type LoginResponse = {
   user: AuthUser;
-  accessToken: string;
-  refreshToken: string;
-  expiresIn: number;
-  refreshExpiresIn: number;
 };
 
 export default function LoginPage() {
@@ -21,8 +17,15 @@ export default function LoginPage() {
 
   const [email, setEmail] = useState('admin@anorvisa.com');
   const [password, setPassword] = useState('');
+  const [rememberMe, setRememberMe] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
+
+  const passwordRef = useRef<HTMLInputElement>(null);
+  const [noticeDismissed, setNoticeDismissed] = useState(false);
+
+  const showPasswordChangedNotice =
+    !noticeDismissed && searchParams.get('reason') === 'password-changed';
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -38,25 +41,28 @@ export default function LoginPage() {
       const result = await apiClient.post<LoginResponse>('/auth/login', {
         email: email.trim(),
         password,
+        rememberMe,
       });
 
-      // 把登录结果统一写入 localStorage.anor_auth
-      saveAuthFromLoginResult(result);
-
-      // 如果 URL 中带有 redirect 参数（例如 /login?redirect=/articles/admin/new），
-      // 则优先跳回该地址；
+      // 使用后端 Set-Cookie 写入 httpOnly cookie；前端不保存任何 token 或本地凭证。
+      // 如果 URL 中带有 redirect 参数（例如 /login?redirect=/articles/admin/new），则优先跳回该地址；
       // 否则根据角色采用默认跳转策略：
       // - admin → 后台文章列表
-      // - 其他角色 → 个人中心（后面可以再扩展）
+      // - 其他角色 → 个人中心
       const redirect = searchParams.get('redirect');
+      const defaultTarget = result?.user?.role === 'admin' ? '/articles/admin' : '/me';
+      const target = redirect && redirect.startsWith('/') ? redirect : defaultTarget;
 
-      if (redirect && redirect.startsWith('/')) {
-        router.push(redirect);
-      } else if (result.user.role === 'admin') {
-        router.push('/admin');
-      } else {
-        router.push('/me');
-      }
+      // 由于 RootLayout 是 Server Component（读取 cookies 渲染导航），
+      // 登录成功后需要 refresh 一次，确保导航栏立刻从“登录”切换为“我的”。
+      // 使用 replace 避免把 /login 留在历史记录中。
+      router.replace(target);
+
+      // 确保导航发生后再触发 refresh，让 Server Components（RootLayout）重新读取 cookies。
+      setTimeout(() => {
+        router.refresh();
+      }, 0);
+      return;
     } catch (err) {
       const apiErr = err as ApiError;
 
@@ -81,6 +87,27 @@ export default function LoginPage() {
       <div className="w-full max-w-md rounded-lg bg-white p-6 shadow">
         <h1 className="mb-6 text-center text-2xl font-semibold">登录 Anor 账号</h1>
 
+        {showPasswordChangedNotice && (
+          <div className="mb-4 rounded border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-700">
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <div className="font-medium">密码修改成功</div>
+                <div className="mt-0.5">请重新登录后继续使用。</div>
+              </div>
+              <button
+                type="button"
+                className="shrink-0 rounded-md bg-emerald-600 px-3 py-1 text-xs font-medium text-white hover:bg-emerald-700"
+                onClick={() => {
+                  setNoticeDismissed(true);
+                  passwordRef.current?.focus();
+                }}
+              >
+                重新登录
+              </button>
+            </div>
+          </div>
+        )}
+
         {errorMsg && (
           <div className="mb-4 rounded border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
             {errorMsg}
@@ -103,6 +130,7 @@ export default function LoginPage() {
           <div>
             <label className="mb-1 block text-sm font-medium text-slate-700">密码</label>
             <input
+              ref={passwordRef}
               type="password"
               className="block w-full rounded-md border border-slate-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
               value={password}
@@ -110,6 +138,18 @@ export default function LoginPage() {
               placeholder="请输入密码"
               autoComplete="current-password"
             />
+          </div>
+
+          <div className="flex items-center justify-between">
+            <label className="flex items-center gap-2 text-sm text-slate-700">
+              <input
+                type="checkbox"
+                className="h-4 w-4 rounded border-slate-300"
+                checked={rememberMe}
+                onChange={(e) => setRememberMe(e.target.checked)}
+              />
+              记住我（7 天内本机免登录）
+            </label>
           </div>
 
           <button
@@ -124,9 +164,9 @@ export default function LoginPage() {
         {/* 原来的“仅支持管理员登录”提示删除 */}
         <p className="mt-4 text-center text-xs text-slate-500">
           还没有账号？请先前往{' '}
-          <a href="/register" className="text-blue-600 underline underline-offset-2">
+          <Link href="/register" className="text-blue-600 underline underline-offset-2">
             注册页面
-          </a>
+          </Link>
           创建新账号。
         </p>
       </div>

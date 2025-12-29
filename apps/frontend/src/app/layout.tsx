@@ -1,20 +1,20 @@
 // apps/frontend/src/app/layout.tsx
-import { QueryProvider } from "./query-provider";
-import type { Metadata } from "next";
-import "./globals.css";
-import Link from "next/link";
-import { AuthProvider } from "./auth-provider";
+import { QueryProvider } from './query-provider';
+import type { Metadata } from 'next';
+import './globals.css';
+import Link from 'next/link';
+import { AuthProvider } from './auth-provider';
+import { cookies } from 'next/headers';
 
 export const metadata: Metadata = {
-  title: "Anor 移民服务",
-  description: "面向中国用户的加拿大移民资讯、课程与工具平台",
+  title: 'Anor 移民服务',
+  description: '面向中国用户的加拿大移民资讯、课程与工具平台',
 };
 
-export default function RootLayout({
-  children,
-}: {
-  children: React.ReactNode;
-}) {
+export default async function RootLayout({ children }: { children: React.ReactNode }) {
+  const cookieStore = await cookies();
+  const hasAccessToken = Boolean(cookieStore.get('anor_at')?.value);
+
   return (
     <html lang="zh-CN">
       <body className="min-h-screen bg-slate-50 text-slate-900 antialiased">
@@ -29,12 +29,12 @@ export default function RootLayout({
                 <Link href="/articles">资讯</Link>
                 <Link href="/courses">课程</Link>
                 <Link href="/tools">工具</Link>
-                <Link href="/me">我的</Link>
+                <Link id="nav-auth-link" href={hasAccessToken ? '/me' : '/login'}>
+                  {hasAccessToken ? '我的' : '登录'}
+                </Link>
               </nav>
 
-              <div className="ml-auto text-sm text-slate-500">
-                {/* Auth 区域占位 */}
-              </div>
+              <div className="ml-auto text-sm text-slate-500">{/* Auth 区域占位 */}</div>
             </div>
           </header>
 
@@ -42,9 +42,7 @@ export default function RootLayout({
           <main className="flex-1">
             <div className="mx-auto w-full max-w-6xl px-4 py-8">
               <QueryProvider>
-                <AuthProvider>
-                  {children}
-                </AuthProvider>
+                <AuthProvider>{children}</AuthProvider>
               </QueryProvider>
             </div>
           </main>

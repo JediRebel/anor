@@ -3,8 +3,6 @@
 
 import React, { useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
-import { apiClient, ApiError } from '@/lib/api-client';
-import { ensureFreshAuth } from '@/lib/auth/client-auth';
 
 type ArticleStatus = 'draft' | 'published';
 
@@ -55,6 +53,20 @@ function classNames(...cls: Array<string | false | null | undefined>) {
   return cls.filter(Boolean).join(' ');
 }
 
+async function readApiErrorMessage(res: Response) {
+  try {
+    const data = await res.json();
+    const msg = (data as any)?.message;
+    if (typeof msg === 'string' && msg.trim()) return msg.trim();
+    if (Array.isArray(msg) && msg.length) return msg.join('; ');
+    if (typeof (data as any)?.error === 'string' && (data as any).error.trim())
+      return (data as any).error.trim();
+  } catch {
+    // ignore
+  }
+  return `请求失败（HTTP ${res.status}）`;
+}
+
 /**
  * 非 admin（未登录 / 普通用户等）访问后台列表时显示的 “伪 404” 页。
  * 不跳转、不清理登录状态。
@@ -89,43 +101,45 @@ export default function ArticlesAdminPage() {
   const [checkedAuth, setCheckedAuth] = useState(false);
   const [isAdmin, setIsAdmin] = useState(false);
 
-  // 只在客户端读取 localStorage，判断当前是否 admin
+  // 使用后端 /auth/me（httpOnly cookie）判断是否管理员。
+
   useEffect(() => {
     if (typeof window === 'undefined') return;
 
-    let role: string | undefined;
+    let cancelled = false;
 
-    try {
-      // 1) 旧结构 anor_user
-      const rawUser = window.localStorage.getItem('anor_user');
-      if (rawUser) {
-        const parsed = JSON.parse(rawUser);
-        if (parsed && typeof parsed === 'object') {
-          role = (parsed as any).role;
-        }
-      }
+    (async () => {
+      try {
+        const res = await fetch(`${API_BASE}/auth/me`, {
+          method: 'GET',
+          credentials: 'include',
+          cache: 'no-store',
+        });
 
-      // 2) 新结构 anor_auth.user
-      if (!role) {
-        const rawAuth = window.localStorage.getItem('anor_auth');
-        if (rawAuth) {
-          const parsedAuth = JSON.parse(rawAuth);
-          if (
-            parsedAuth &&
-            typeof parsedAuth === 'object' &&
-            (parsedAuth as any).user &&
-            typeof (parsedAuth as any).user === 'object'
-          ) {
-            role = (parsedAuth as any).user.role;
+        if (!res.ok) {
+          if (!cancelled) {
+            setIsAdmin(false);
+            setCheckedAuth(true);
           }
+          return;
+        }
+
+        const me = (await res.json()) as { role?: string };
+        if (!cancelled) {
+          setIsAdmin(me?.role === 'admin');
+          setCheckedAuth(true);
+        }
+      } catch {
+        if (!cancelled) {
+          setIsAdmin(false);
+          setCheckedAuth(true);
         }
       }
-    } catch {
-      // 解析失败就当没登录
-    }
+    })();
 
-    setIsAdmin(role === 'admin');
-    setCheckedAuth(true);
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   // ==== 只有在“已经确认是 admin”之后，才去请求后台列表 ====
@@ -138,73 +152,70 @@ export default function ArticlesAdminPage() {
       return;
     }
 
+    let cancelled = false;
+
     const fetchArticles = async () => {
       setLoading(true);
       setError(null);
 
-      // 先尝试用 refreshToken 换一对新的（滑动过期）
-      const auth = await ensureFreshAuth();
-
-      // refreshToken 也失效 / 没有登录信息：不再请求后台接口，避免打出 jwt expired 日志
-      if (!auth) {
-        setError('当前管理员登录已过期，请重新登录后再访问后台文章列表。');
-        setLoading(false);
-        return;
-      }
-
       try {
-        const data = await apiClient.get<AdminArticlesResponse>(
-          '/admin/articles?page=1&pageSize=200',
-          {
-            headers: {
-              Authorization: `Bearer ${auth.accessToken}`,
-            },
-          },
-        );
+        const res = await fetch(`${API_BASE}/admin/articles?page=1&pageSize=200`, {
+          method: 'GET',
+          credentials: 'include',
+          cache: 'no-store',
+        });
 
-        setArticles(data.items ?? []);
-      } catch (err) {
-        const apiErr = err as ApiError;
-
-        if (apiErr.status === 401 || apiErr.status === 403) {
-          // 理论上走到这里，说明后端还是认为 token 无效（比如时间误差、token 被撤销）
-          setError('当前管理员登录已过期，请重新登录后再访问后台文章列表。');
-        } else {
-          setError(apiErr.message || '加载文章列表失败，请稍后重试。');
+        if (res.status === 401 || res.status === 403) {
+          const msg = await readApiErrorMessage(res);
+          if (!cancelled) {
+            setError(msg || '当前管理员登录已过期，请重新登录后再访问后台文章列表。');
+            setArticles([]);
+          }
+          return;
         }
+
+        if (!res.ok) {
+          const msg = await readApiErrorMessage(res);
+          if (!cancelled) setError(msg || '加载文章列表失败，请稍后重试。');
+          return;
+        }
+
+        const data = (await res.json()) as AdminArticlesResponse;
+        if (!cancelled) setArticles(data.items ?? []);
+      } catch {
+        if (!cancelled) setError('加载文章列表失败，请稍后重试。');
       } finally {
-        setLoading(false);
+        if (!cancelled) setLoading(false);
       }
     };
 
     fetchArticles();
+
+    return () => {
+      cancelled = true;
+    };
   }, [checkedAuth, isAdmin]);
 
   const handleTogglePin = async (id: number, current: boolean) => {
-    // 每次操作前也尝试刷新一次 token，避免点击时刚好过期
-    const auth = await ensureFreshAuth();
-    if (!auth) {
-      setError('当前管理员登录已过期，请重新登录后再尝试修改置顶状态。');
-      return;
-    }
-
     try {
       const res = await fetch(`${API_BASE}/admin/articles/${id}/pin`, {
         method: 'PATCH',
         headers: {
           'Content-Type': 'application/json',
-          Authorization: `Bearer ${auth.accessToken}`,
         },
+        credentials: 'include',
         body: JSON.stringify({ isPinned: !current }),
       });
 
       if (res.status === 401 || res.status === 403) {
-        setError('当前管理员登录已过期，请重新登录后再尝试修改置顶状态。');
+        const msg = await readApiErrorMessage(res);
+        setError(msg || '当前管理员登录已过期，请重新登录后再尝试修改置顶状态。');
         return;
       }
 
       if (!res.ok) {
-        setError('置顶状态修改失败，请稍后重试。');
+        const msg = await readApiErrorMessage(res);
+        setError(msg || '置顶状态修改失败，请稍后重试。');
         return;
       }
 
@@ -218,27 +229,21 @@ export default function ArticlesAdminPage() {
   const handleDelete = async (id: number) => {
     if (!confirm('确定要删除这篇文章吗？此操作不可恢复。')) return;
 
-    const auth = await ensureFreshAuth();
-    if (!auth) {
-      setError('当前管理员登录已过期，请重新登录后再尝试删除文章。');
-      return;
-    }
-
     try {
       const res = await fetch(`${API_BASE}/admin/articles/${id}`, {
         method: 'DELETE',
-        headers: {
-          Authorization: `Bearer ${auth.accessToken}`,
-        },
+        credentials: 'include',
       });
 
       if (res.status === 401 || res.status === 403) {
-        setError('当前管理员登录已过期，请重新登录后再尝试删除文章。');
+        const msg = await readApiErrorMessage(res);
+        setError(msg || '当前管理员登录已过期，请重新登录后再尝试删除文章。');
         return;
       }
 
       if (!res.ok) {
-        setError('删除失败，请稍后再试。');
+        const msg = await readApiErrorMessage(res);
+        setError(msg || '删除失败，请稍后再试。');
         return;
       }
 

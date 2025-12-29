@@ -4,8 +4,6 @@
 import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
-import { apiClient, ApiError } from '@/lib/api-client';
-import { ensureFreshAuth } from '@/lib/auth/client-auth';
 
 type ArticleStatus = 'draft' | 'published';
 
@@ -21,7 +19,21 @@ interface CreateArticlePayload {
 }
 
 // 上传接口使用的后端基础地址
-const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL ?? 'http://localhost:3001';
+const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL || 'http://localhost:3001';
+
+async function readApiErrorMessage(res: Response) {
+  try {
+    const data = await res.json();
+    const msg = (data as any)?.message;
+    if (typeof msg === 'string' && msg.trim()) return msg.trim();
+    if (Array.isArray(msg) && msg.length) return msg.join('; ');
+    if (typeof (data as any)?.error === 'string' && (data as any).error.trim())
+      return (data as any).error.trim();
+  } catch {
+    // ignore
+  }
+  return `请求失败（HTTP ${res.status}）`;
+}
 
 export default function NewArticlePage() {
   const router = useRouter();
@@ -48,40 +60,52 @@ export default function NewArticlePage() {
   useEffect(() => {
     if (typeof window === 'undefined') return;
 
-    let role: string | undefined;
+    let cancelled = false;
 
-    try {
-      // 1) 优先从 anor_user 读取
-      const rawUser = window.localStorage.getItem('anor_user');
-      if (rawUser) {
-        const parsed = JSON.parse(rawUser);
-        if (parsed && typeof parsed === 'object') {
-          role = (parsed as any).role;
-        }
-      }
+    (async () => {
+      try {
+        const res = await fetch(`${API_BASE}/auth/me`, {
+          method: 'GET',
+          credentials: 'include',
+          cache: 'no-store',
+        });
 
-      // 2) 如果还没拿到，再尝试从 anor_auth.user 里读
-      if (!role) {
-        const rawAuth = window.localStorage.getItem('anor_auth');
-        if (rawAuth) {
-          const parsedAuth = JSON.parse(rawAuth);
-          if (
-            parsedAuth &&
-            typeof parsedAuth === 'object' &&
-            (parsedAuth as any).user &&
-            typeof (parsedAuth as any).user === 'object'
-          ) {
-            role = (parsedAuth as any).user.role;
+        if (!res.ok) {
+          // 未登录/登录失效：跳转登录，让用户重新获取 cookie
+          if (res.status === 401 || res.status === 403) {
+            if (!cancelled) {
+              setIsAdmin(false);
+              setCheckedAuth(true);
+            }
+            router.replace('/login?redirect=/articles/admin/new');
+            return;
           }
+
+          // 其他异常：仍按非管理员处理（伪 404）
+          if (!cancelled) {
+            setIsAdmin(false);
+            setCheckedAuth(true);
+          }
+          return;
+        }
+
+        const me = (await res.json()) as { role?: string };
+        if (!cancelled) {
+          setIsAdmin(me?.role === 'admin');
+          setCheckedAuth(true);
+        }
+      } catch {
+        if (!cancelled) {
+          setIsAdmin(false);
+          setCheckedAuth(true);
         }
       }
-    } catch {
-      // 解析失败就当没登录，不需要 console.error
-    }
+    })();
 
-    setIsAdmin(role === 'admin');
-    setCheckedAuth(true);
-  }, []);
+    return () => {
+      cancelled = true;
+    };
+  }, [router]);
 
   // 还在检测本地登录信息时
   if (!checkedAuth) {
@@ -130,27 +154,22 @@ export default function NewArticlePage() {
     setUploadingCover(true);
 
     try {
-      const auth = await ensureFreshAuth();
-
-      if (!auth?.accessToken) {
-        setUploadError('当前登录状态已失效，请重新登录管理员账号后再上传封面图。');
-        router.push('/login');
-        return;
-      }
-
       const formData = new FormData();
       // 字段名 file 要和后端 FileInterceptor('file') 对应
       formData.append('file', file);
 
-      // 这里不用 apiClient，直接用 fetch，且不要手动设置 Content-Type
+      // 使用 httpOnly cookie 鉴权
       const res = await fetch(`${API_BASE}/admin/uploads/article-cover`, {
         method: 'POST',
-        headers: {
-          Authorization: `Bearer ${auth.accessToken}`,
-          // 注意：不要写 'Content-Type'，让浏览器自己带 multipart/form-data boundary
-        },
+        credentials: 'include',
         body: formData,
       });
+
+      if (res.status === 401 || res.status === 403) {
+        setUploadError('当前登录状态已失效或无权限，请重新登录管理员账号后再上传封面图。');
+        router.push('/login?redirect=/articles/admin/new');
+        return;
+      }
 
       if (!res.ok) {
         // 尝试读后端错误信息
@@ -188,13 +207,8 @@ export default function NewArticlePage() {
         ...prev,
         coverImageUrl: stored,
       }));
-    } catch (err) {
-      const apiErr = err as ApiError;
-      if (apiErr && typeof apiErr.message === 'string' && apiErr.message) {
-        setUploadError(apiErr.message);
-      } else {
-        setUploadError('上传封面图失败，请稍后重试。');
-      }
+    } catch {
+      setUploadError('上传封面图失败，请稍后重试。');
     } finally {
       setUploadingCover(false);
       // 清空 input 的值，方便再次选择同一文件
@@ -205,15 +219,6 @@ export default function NewArticlePage() {
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     setErrorMsg(null);
-
-    // 先保证本地 auth 是“新鲜的”（必要时用 refreshToken 自动刷新）
-    const auth = await ensureFreshAuth();
-    if (!auth?.accessToken) {
-      // refreshToken 也过期 / 刷新失败：认为登录状态已经彻底失效
-      setErrorMsg('当前登录状态已失效，请重新登录管理员账号后再创建文章。');
-      router.push('/login');
-      return;
-    }
 
     // 极简校验：标题和 slug 必填
     if (!form.title.trim()) {
@@ -237,49 +242,37 @@ export default function NewArticlePage() {
 
     setSubmitting(true);
     try {
-      await apiClient.post('/admin/articles', payload, {
+      const res = await fetch(`${API_BASE}/admin/articles`, {
+        method: 'POST',
         headers: {
-          Authorization: `Bearer ${auth.accessToken}`,
+          'Content-Type': 'application/json',
         },
+        credentials: 'include',
+        body: JSON.stringify(payload),
       });
 
-      // 成功后跳回后台列表页
-      router.push('/articles/admin');
-    } catch (err) {
-      const apiErr = err as ApiError;
-
-      if (apiErr.status === 401) {
-        // token 无效或过期：后端不再承认这次登录
-        setErrorMsg('创建失败：当前登录已过期，请重新登录管理员账号后再尝试创建。');
-        router.push('/login');
+      if (res.status === 401 || res.status === 403) {
+        setErrorMsg('创建失败：当前登录已过期或无权限，请重新登录管理员账号后再尝试创建。');
+        router.push('/login?redirect=/articles/admin/new');
         return;
       }
 
-      if (apiErr.status === 409) {
-        // 409：slug 冲突
-        let serverMsg: string | null = null;
-
-        if (apiErr.data && typeof apiErr.data === 'object') {
-          const data: any = apiErr.data;
-          if (Array.isArray(data.message) && typeof data.message[0] === 'string') {
-            serverMsg = data.message[0];
-          } else if (typeof data.message === 'string') {
-            serverMsg = data.message;
-          }
-        }
-
-        setErrorMsg(
-          serverMsg && serverMsg.trim() ? serverMsg : 'SLUG 已存在，请提供一个新的 SLUG。',
-        );
-      } else if (apiErr && typeof apiErr.message === 'string' && apiErr.message) {
-        // 其他业务错误，直接显示后端 message
-        setErrorMsg(apiErr.message);
-      } else {
-        // 兜底提示
-        setErrorMsg('创建失败，请稍后重试。');
+      if (res.status === 409) {
+        const msg = await readApiErrorMessage(res);
+        setErrorMsg(msg && msg.trim() ? msg : 'SLUG 已存在，请提供一个新的 SLUG。');
+        return;
       }
 
-      // 不再 console.error，避免 DevTools 左下角红色 Issues
+      if (!res.ok) {
+        const msg = await readApiErrorMessage(res);
+        setErrorMsg(msg || '创建失败，请稍后重试。');
+        return;
+      }
+
+      // 成功后跳回后台列表页
+      router.push('/articles/admin');
+    } catch {
+      setErrorMsg('创建失败，请稍后重试。');
     } finally {
       setSubmitting(false);
     }

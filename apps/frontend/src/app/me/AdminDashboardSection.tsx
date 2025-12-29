@@ -46,6 +46,33 @@ export function AdminDashboardSection({ email }: AdminDashboardSectionProps) {
           </div>
         </div>
 
+        {/* 课程管理卡片 */}
+        <div className="rounded-xl border border-gray-200 bg-white p-5 shadow-sm">
+          <h2 className="text-base font-semibold text-gray-900">课程管理</h2>
+          <p className="mt-2 text-sm text-gray-600">
+            管理课程与课节内容，包括课程信息、课节排序、免费试看设置、发布状态等。
+          </p>
+
+          <div className="mt-4 flex flex-wrap gap-3">
+            <Link
+              href="/courses/admin"
+              className="inline-flex items-center rounded-full border border-gray-300 px-4 py-1.5 text-sm text-gray-800 hover:border-gray-400 hover:bg-gray-50"
+            >
+              查看课程列表
+            </Link>
+            <Link
+              href="/courses/admin/new"
+              className="inline-flex items-center rounded-full bg-blue-600 px-4 py-1.5 text-sm font-medium text-white hover:bg-blue-700"
+            >
+              新建课程
+            </Link>
+          </div>
+
+          <p className="mt-3 text-xs text-gray-400">
+            注：若你尚未实现课程后台页面，这两个入口会暂时 404；我们下一步会补齐对应页面。
+          </p>
+        </div>
+
         {/* 预留扩展卡片 */}
         <div className="rounded-xl border border-dashed border-gray-200 bg-gray-50 p-5">
           <h2 className="text-base font-semibold text-gray-900">更多后台功能（预留）</h2>
@@ -53,8 +80,6 @@ export function AdminDashboardSection({ email }: AdminDashboardSectionProps) {
             将来可以在这里增加：
             <br />
             · 用户管理（查看 / 冻结 / 调整角色）
-            <br />
-            · 课程管理（视频课程、文档课程、价格）
             <br />· 收费与访问报表（订单统计、课程访问数据）
           </p>
           <p className="mt-2 text-xs text-gray-400">

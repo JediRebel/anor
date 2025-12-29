@@ -1,3 +1,4 @@
+// apps/frontend/src/app/articles/admin/AdminActions.tsx
 'use client';
 
 import React, { useState, useTransition } from 'react';
@@ -15,8 +16,8 @@ interface Props {
   article: ArticleForActions;
 }
 
-const API_BASE_URL =
-  process.env.NEXT_PUBLIC_API_BASE_URL ?? 'http://localhost:3001';
+// ✅ 用 || 而不是 ??，避免 env 存在但为空字符串导致 API_BASE_URL 变成 ''
+const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL || 'http://localhost:3001';
 
 export default function AdminActions({ article }: Props) {
   const [isPinned, setIsPinned] = useState(article.isPinned);
@@ -32,6 +33,7 @@ export default function AdminActions({ article }: Props) {
         const res = await fetch(`${API_BASE_URL}/admin/articles/${article.id}`, {
           method: 'PUT',
           headers: { 'Content-Type': 'application/json' },
+          credentials: 'include',
           body: JSON.stringify({ isPinned: !isPinned }),
         });
 
@@ -58,6 +60,7 @@ export default function AdminActions({ article }: Props) {
         setIsDeleting(true);
         const res = await fetch(`${API_BASE_URL}/admin/articles/${article.id}`, {
           method: 'DELETE',
+          credentials: 'include',
         });
 
         if (!res.ok) {

@@ -1,129 +1,144 @@
 // apps/frontend/src/lib/api-client.ts
 
-import { clearAuthStorage } from './auth/client-auth';
+// 注意：用 || 而不是 ??，避免 env 存在但为空字符串导致 API_BASE_URL 变成 ''（new URL 会抛错）
+const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL || 'http://localhost:3001';
 
-// 优先使用环境变量作为后端基础地址
-const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL ?? 'http://localhost:3001';
+// 401 自动刷新策略：
+// - access cookie (anor_at) 关闭浏览器会丢失；remember-me 场景下只剩 refresh cookie (anor_rt)
+// - 当后端返回 401 时：尝试调用 /auth/refresh（利用 httpOnly refresh cookie）拿到新的 access cookie
+// - 对幂等请求（GET/HEAD）自动重试一次；对非幂等请求不自动重试，避免重复提交
+let refreshInFlight: Promise<boolean> | null = null;
+
+function isAuthPath(path: string): boolean {
+  // Avoid refresh loops for auth endpoints.
+  return (
+    path.startsWith('/auth/login') ||
+    path.startsWith('/auth/register') ||
+    path.startsWith('/auth/refresh') ||
+    path.startsWith('/auth/logout')
+  );
+}
+
+async function refreshSessionCookies(): Promise<boolean> {
+  if (refreshInFlight) return refreshInFlight;
+
+  refreshInFlight = (async () => {
+    const url = new URL('/auth/refresh', API_BASE_URL).toString();
+    try {
+      const res = await fetch(url, {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({}),
+      });
+      return res.ok;
+    } catch {
+      return false;
+    } finally {
+      refreshInFlight = null;
+    }
+  })();
+
+  return refreshInFlight;
+}
 
 export interface ApiError extends Error {
   status?: number;
   data?: unknown;
 }
 
-/** 从 localStorage 读取 access token（仅在浏览器端可用） */
-function getAccessToken(): string | null {
-  if (typeof window === 'undefined') return null;
-
-  try {
-    // ✅ 现在统一从 anor_auth 里读取
-    const raw = window.localStorage.getItem('anor_auth');
-    if (raw) {
-      const parsed = JSON.parse(raw) as {
-        accessToken?: string;
-        accessTokenExpiresAt?: number;
-      };
-
-      if (parsed.accessToken) {
-        // 如果带了过期时间，顺便做一下简单检查（不过期才用）
-        if (!parsed.accessTokenExpiresAt || parsed.accessTokenExpiresAt > Date.now()) {
-          return parsed.accessToken;
-        }
-      }
-    }
-
-    // 🔙 兼容旧版本：如果以后本地还有 anor_access_token，就当兜底
-    const legacy = window.localStorage.getItem('anor_access_token');
-    if (legacy) return legacy;
-
-    return null;
-  } catch {
-    return null;
-  }
-}
-
 /**
  * 统一封装的请求函数
- * - 自动加 Content-Type
- * - 自动加 Authorization: Bearer <token>（除非调用方已经传了）
+ * - 自动处理 Content-Type（仅在 JSON body 时设置）
+ * - **强制**携带 httpOnly cookie（credentials: 'include'）
  * - 5xx 打 error 日志，4xx 打 warn
- * - 401 时自动清理本地登录信息
  */
 async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
   const url = new URL(path, API_BASE_URL).toString();
-  const method = (options.method ?? 'GET').toUpperCase();
+  const method = String(options.method ?? 'GET').toUpperCase();
 
-  // 基础 headers
-  const headers: HeadersInit = {
-    'Content-Type': 'application/json',
-    ...(options.headers ?? {}),
-  };
-
-  // 🔑 如果调用方没有自己传 Authorization，再自动补 JWT
-  const hasAuthHeader =
-    (headers as any).Authorization != null || (headers as any).authorization != null;
-
-  if (!hasAuthHeader) {
-    const token = getAccessToken();
-    if (token) {
-      (headers as any).Authorization = `Bearer ${token}`;
-    }
-  }
-
+  // 关键：全站统一带 cookie（httpOnly cookie 方案必须）
+  // 注意：这里是“强制 include”，不允许被调用方覆盖
   const finalOptions: RequestInit = {
     ...options,
     method,
-    headers,
+    credentials: 'include',
   };
 
-  // 开发环境简单记录请求
-  if (process.env.NODE_ENV !== 'production') {
-    console.log('[apiClient] Request', {
-      url,
-      method,
-      headers,
-      body: finalOptions.body,
-    });
+  // 统一处理 headers（避免直接用对象 spread 导致 Headers/大小写问题）
+  const headers = new Headers(options.headers ?? undefined);
+
+  // 仅在“看起来是 JSON body”时补 Content-Type。
+  // 1) 若用户传的是 FormData/Blob/ArrayBuffer 等，不能手动设置 Content-Type（浏览器会自动加 boundary）
+  // 2) 我们的 apiClient.post/put 默认会传 stringified JSON
+  const hasBody = finalOptions.body !== undefined && finalOptions.body !== null;
+  const isStringBody = typeof finalOptions.body === 'string';
+  if (hasBody && isStringBody && !headers.has('Content-Type')) {
+    headers.set('Content-Type', 'application/json');
   }
 
-  let res: Response;
-  try {
-    res = await fetch(url, finalOptions);
-  } catch (err) {
-    if (process.env.NODE_ENV !== 'production') {
-      console.error('[apiClient] Network error', { url, method, err });
-    }
-    const error: ApiError = new Error('网络请求失败，请稍后重试。');
-    throw error;
-  }
+  finalOptions.headers = headers;
 
-  const text = await res.text();
-  let data: unknown = null;
-
-  if (text) {
+  const parseBody = async (res: Response): Promise<unknown> => {
+    const text = await res.text();
+    if (!text) return null;
     try {
-      data = JSON.parse(text);
+      return JSON.parse(text);
     } catch {
-      data = text;
+      return text;
     }
-  }
+  };
 
-  if (!res.ok) {
-    let messageFromServer =
+  const buildApiError = (status: number, data: unknown): ApiError => {
+    const messageFromServer =
       (data as any)?.message ||
       (typeof data === 'string' ? data : '') ||
-      `请求失败，状态码：${res.status}`;
+      `请求失败，状态码：${status}`;
 
     const error: ApiError = new Error(messageFromServer);
-    error.status = res.status;
+    error.status = status;
     error.data = data;
+    return error;
+  };
 
-    // 401：登录状态失效，顺带清理本地存储
-    if (res.status === 401) {
-      clearAuthStorage();
-      // 尽量使用后端返回的提示文案，统一风格；没有时才用兜底文案
-      const backendMsg = (data as any)?.message;
-      error.message = backendMsg || '当前登录状态已失效，请重新登录。';
+  const doFetchOnce = async (): Promise<{ res: Response; data: unknown }> => {
+    if (process.env.NODE_ENV !== 'production') {
+      console.log('[apiClient] Request', {
+        url,
+        method,
+        hasBody,
+      });
     }
+
+    let res: Response;
+    try {
+      res = await fetch(url, finalOptions);
+    } catch (err) {
+      if (process.env.NODE_ENV !== 'production') {
+        console.error('[apiClient] Network error', { url, method, err });
+      }
+      const error: ApiError = new Error('网络请求失败，请稍后重试。');
+      throw error;
+    }
+
+    const data = await parseBody(res);
+    return { res, data };
+  };
+
+  // 1) 首次请求
+  let { res, data } = await doFetchOnce();
+
+  // 2) 401 处理：尝试 refresh cookie session，再对 GET/HEAD 重试一次
+  if (res.status === 401 && !isAuthPath(path) && (method === 'GET' || method === 'HEAD')) {
+    const refreshed = await refreshSessionCookies();
+    if (refreshed) {
+      ({ res, data } = await doFetchOnce());
+    }
+  }
+
+  // 3) 统一错误处理
+  if (!res.ok) {
+    const error = buildApiError(res.status, data);
 
     if (process.env.NODE_ENV !== 'production') {
       const logPayload = { url, method, status: res.status, data };
@@ -141,7 +156,6 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
     console.log('[apiClient] Response OK', {
       url,
       method,
-      data,
     });
   }
 

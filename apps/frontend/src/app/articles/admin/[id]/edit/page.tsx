@@ -2,12 +2,25 @@
 'use client';
 
 import React, { useEffect, useState } from 'react';
-import { useRouter, useParams } from 'next/navigation';
+import { useParams, useRouter } from 'next/navigation';
 import Link from 'next/link';
-import { apiClient, ApiError } from '@/lib/api-client';
-import { ensureFreshAuth } from '@/lib/auth/client-auth';
 
 const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL ?? 'http://localhost:3001';
+
+async function readApiErrorMessage(res: Response) {
+  try {
+    const data = await res.json();
+    const msg = (data as any)?.message;
+    if (typeof msg === 'string' && msg.trim()) return msg.trim();
+    if (Array.isArray(msg) && msg.length) return msg.join('; ');
+    if (typeof (data as any)?.error === 'string' && (data as any).error.trim()) {
+      return (data as any).error.trim();
+    }
+  } catch {
+    // ignore
+  }
+  return `请求失败（HTTP ${res.status}）`;
+}
 
 // ===== 类型定义 =====
 
@@ -78,39 +91,40 @@ export default function EditArticlePage() {
   useEffect(() => {
     if (typeof window === 'undefined') return;
 
-    let role: string | undefined;
+    let cancelled = false;
 
-    try {
-      // 1) 旧结构 anor_user
-      const rawUser = window.localStorage.getItem('anor_user');
-      if (rawUser) {
-        const parsed = JSON.parse(rawUser);
-        if (parsed && typeof parsed === 'object') {
-          role = (parsed as any).role;
-        }
-      }
+    (async () => {
+      try {
+        const res = await fetch(`${API_BASE}/auth/me`, {
+          method: 'GET',
+          credentials: 'include',
+          cache: 'no-store',
+        });
 
-      // 2) 新结构 anor_auth.user
-      if (!role) {
-        const rawAuth = window.localStorage.getItem('anor_auth');
-        if (rawAuth) {
-          const parsedAuth = JSON.parse(rawAuth);
-          if (
-            parsedAuth &&
-            typeof parsedAuth === 'object' &&
-            (parsedAuth as any).user &&
-            typeof (parsedAuth as any).user === 'object'
-          ) {
-            role = (parsedAuth as any).user.role;
+        if (!res.ok) {
+          if (!cancelled) {
+            setIsAdmin(false);
+            setCheckedAuth(true);
           }
+          return;
+        }
+
+        const me = (await res.json()) as { role?: string };
+        if (!cancelled) {
+          setIsAdmin(me?.role === 'admin');
+          setCheckedAuth(true);
+        }
+      } catch {
+        if (!cancelled) {
+          setIsAdmin(false);
+          setCheckedAuth(true);
         }
       }
-    } catch {
-      // 解析失败就当没登录，不需要 console.error
-    }
+    })();
 
-    setIsAdmin(role === 'admin');
-    setCheckedAuth(true);
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   // ===== 在确认是 admin 之后，再加载文章数据（带滑动刷新） =====
@@ -135,25 +149,30 @@ export default function EditArticlePage() {
       setLoadError(null);
 
       try {
-        // 先确保本地 token 是“新鲜的”，必要时用 refreshToken 自动刷新
-        const auth = await ensureFreshAuth();
+        const res = await fetch(`${API_BASE}/admin/articles/${id}`, {
+          method: 'GET',
+          credentials: 'include',
+          cache: 'no-store',
+        });
 
-        if (!auth?.accessToken) {
+        if (res.status === 401 || res.status === 403) {
           setLoadError('加载文章失败：当前管理员登录已失效，请重新登录管理员账号后再访问后台。');
-          setLoading(false);
+          router.replace(`/login?redirect=/articles/admin/${id}/edit`);
           return;
         }
 
-        const data = await apiClient.get<ArticleFromServer>(`/admin/articles/${id}`, {
-          headers: {
-            Authorization: `Bearer ${auth.accessToken}`,
-          },
-        });
-
-        if (!data) {
+        if (res.status === 404) {
           setLoadError('未找到对应的文章。');
           return;
         }
+
+        if (!res.ok) {
+          const msg = await readApiErrorMessage(res);
+          setLoadError(msg || '加载文章失败，请稍后重试。');
+          return;
+        }
+
+        const data = (await res.json()) as ArticleFromServer;
 
         setForm({
           title: data.title ?? '',
@@ -164,16 +183,8 @@ export default function EditArticlePage() {
           isPinned: data.isPinned,
           coverImageUrl: data.coverImageUrl ?? '',
         });
-      } catch (err) {
-        const apiErr = err as ApiError;
-
-        if (apiErr.status === 404) {
-          setLoadError('未找到对应的文章。');
-        } else if (apiErr.status === 401 || apiErr.status === 403) {
-          setLoadError('加载文章失败：当前管理员登录已失效，请重新登录管理员账号后再访问后台。');
-        } else {
-          setLoadError(apiErr.message || '加载文章失败，请稍后重试。');
-        }
+      } catch {
+        setLoadError('加载文章失败，请稍后重试。');
       } finally {
         setLoading(false);
       }
@@ -191,21 +202,12 @@ export default function EditArticlePage() {
     setUploadingCover(true);
 
     try {
-      // 先确保当前管理员登录状态 + token 有效（必要时自动 refresh）
-      const auth = await ensureFreshAuth();
-      if (!auth?.accessToken) {
-        setUploadError('上传失败：当前管理员登录已失效，请重新登录管理员账号后再尝试上传封面。');
-        return;
-      }
-
       const formData = new FormData();
       formData.append('file', file);
 
       const res = await fetch(`${API_BASE}/admin/uploads/article-cover`, {
         method: 'POST',
-        headers: {
-          Authorization: `Bearer ${auth.accessToken}`,
-        },
+        credentials: 'include',
         body: formData,
       });
 
@@ -214,6 +216,7 @@ export default function EditArticlePage() {
 
         if (res.status === 401 || res.status === 403) {
           message = '上传失败：当前管理员登录已失效，请重新登录管理员账号后再尝试上传封面。';
+          router.replace(`/login?redirect=/articles/admin/${id}/edit`);
         } else {
           // 尝试读取后端返回的 message
           try {
@@ -229,15 +232,20 @@ export default function EditArticlePage() {
         throw new Error(message);
       }
 
-      const json = (await res.json()) as { url?: string };
-      const urlFromServer = json.url;
+      const json = (await res.json()) as { url?: string; path?: string };
+      const stored =
+        typeof json.url === 'string' && json.url.trim()
+          ? json.url.trim()
+          : typeof json.path === 'string' && json.path.trim()
+            ? json.path.trim()
+            : '';
 
-      if (!urlFromServer) {
+      if (!stored) {
         throw new Error('后端未返回封面地址，请联系管理员。');
       }
 
-      // 写回表单：保存后端返回的对外 URL
-      setForm((prev) => (prev ? { ...prev, coverImageUrl: urlFromServer } : prev));
+      // 写回表单：保存后端返回的 URL 或相对路径
+      setForm((prev) => (prev ? { ...prev, coverImageUrl: stored } : prev));
     } catch (err) {
       const message = err instanceof Error ? err.message : '上传封面图失败，请稍后重试。';
       setUploadError(message);
@@ -286,50 +294,45 @@ export default function EditArticlePage() {
       // content 允许保留前后空格
     };
 
-    // 先确保当前登录状态和 token 有效（必要时自动 refresh）
-    const auth = await ensureFreshAuth();
-
-    if (!auth?.accessToken) {
-      setErrorMsg('保存失败：当前管理员登录已失效，请重新登录管理员账号后再尝试保存。');
-      router.push('/login');
-      return;
-    }
-
     setSubmitting(true);
     try {
-      await apiClient.put(`/admin/articles/${id}`, payload, {
+      const res = await fetch(`${API_BASE}/admin/articles/${id}`, {
+        method: 'PUT',
         headers: {
-          Authorization: `Bearer ${auth.accessToken}`,
+          'Content-Type': 'application/json',
         },
+        credentials: 'include',
+        body: JSON.stringify(payload),
       });
+
+      if (res.status === 401 || res.status === 403) {
+        setErrorMsg('保存失败：当前管理员登录已失效，请重新登录管理员账号后再尝试保存。');
+        router.replace(`/login?redirect=/articles/admin/${id}/edit`);
+        return;
+      }
+
+      if (res.status === 409) {
+        const msg = await readApiErrorMessage(res);
+        setErrorMsg(msg || 'SLUG 已存在，请提供一个新的 SLUG。');
+        return;
+      }
+
+      if (res.status === 400) {
+        const msg = await readApiErrorMessage(res);
+        setErrorMsg(msg || '更新文章失败：参数不合法，请检查后重试。');
+        return;
+      }
+
+      if (!res.ok) {
+        const msg = await readApiErrorMessage(res);
+        setErrorMsg(msg || '更新文章失败，请稍后重试。');
+        return;
+      }
 
       // 成功后返回列表
       router.push('/articles/admin');
-    } catch (err) {
-      const apiErr = err as ApiError;
-      let msg: string | null = null;
-
-      if (apiErr.status === 401 || apiErr.status === 403) {
-        msg = '保存失败：当前管理员登录已失效，请重新登录管理员账号后再尝试保存。';
-        setErrorMsg(msg);
-        router.push('/login');
-        return;
-      } else if (apiErr.status === 409) {
-        // 409：slug 冲突
-        msg = 'SLUG 已存在，请提供一个新的 SLUG。';
-      } else if (apiErr.status === 400) {
-        // 400：class-validator 校验不通过（slug 格式、长度等）
-        if (apiErr.data && typeof apiErr.data === 'object') {
-          const data: any = apiErr.data;
-          if (Array.isArray(data.message) && data.message.length > 0) {
-            msg = String(data.message[0]);
-          } else if (typeof data.message === 'string') {
-            msg = data.message;
-          }
-        }
-      }
-
-      setErrorMsg(msg || apiErr.message || '更新文章失败，请稍后重试。');
+    } catch {
+      setErrorMsg('更新文章失败，请稍后重试。');
     } finally {
       setSubmitting(false);
     }

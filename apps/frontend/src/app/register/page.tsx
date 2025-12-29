@@ -5,9 +5,7 @@ import { useState } from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 
-import type { AuthResponse } from '@/lib/api/auth';
 import { register } from '@/lib/api/auth';
-import { saveAuthFromLoginResult } from '@/lib/auth/client-auth';
 
 const MIN_PASSWORD_LENGTH = 8;
 const MAX_PASSWORD_LENGTH = 64;
@@ -83,10 +81,8 @@ export default function RegisterPage() {
     setSubmitting(true);
     try {
       // 调用后端 /auth/register（注册即登录）
-      const result: AuthResponse = await register({ email, password });
-
-      // 注册成功后，和登录一样：保存 token + 用户信息
-      saveAuthFromLoginResult(result);
+      // 注册成功后：后端已通过 Set-Cookie 建立会话；前端不保存任何 token 或本地凭证，直接跳转到 /me
+      await register({ email, password });
 
       // 注册后跳转到 /me（以后可以改成“我的课程”等页面）
       router.push('/me');
