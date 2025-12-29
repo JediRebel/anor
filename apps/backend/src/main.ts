@@ -13,6 +13,27 @@ async function bootstrap() {
     bufferLogs: true, // 为后面日志做准备，可留着
   });
 
+  // 解析 Cookie（用于 httpOnly cookie 携带 JWT）
+  // 不依赖 cookie-parser，避免在 monorepo 中出现依赖/类型缺失导致无法编译。
+  // 仅做最小实现：把 Cookie header 解析到 req.cookies，供后续 JWT extractor / guard 使用。
+  app.use((req: any, _res: any, next: any) => {
+    const header = req?.headers?.cookie;
+    const cookies: Record<string, string> = {};
+
+    if (typeof header === 'string' && header.length) {
+      for (const part of header.split(';')) {
+        const [rawKey, ...rest] = part.split('=');
+        const key = rawKey?.trim();
+        if (!key) continue;
+        const value = rest.join('=');
+        cookies[key] = decodeURIComponent((value ?? '').trim());
+      }
+    }
+
+    req.cookies = cookies;
+    next();
+  });
+
   // 全局参数校验：后面 Controller 用 DTO 时会自动生效
   app.useGlobalPipes(
     new ValidationPipe({

@@ -8,6 +8,8 @@ import { DbModule } from './db/db.module'; // ✅ 新增
 import { AuthModule } from './modules/auth/auth.module';
 import { ArticlesModule } from './modules/articles/articles.module';
 import { UploadsModule } from './modules/uploads/uploads.module';
+import { CoursesModule } from './modules/courses/courses.module';
+import { MeModule } from './modules/me/me.module';
 
 @Module({
   imports: [
@@ -20,6 +22,8 @@ import { UploadsModule } from './modules/uploads/uploads.module';
     AuthModule,
     ArticlesModule,
     UploadsModule,
+    CoursesModule,
+    MeModule,
   ],
   controllers: [AppController],
   providers: [AppService],

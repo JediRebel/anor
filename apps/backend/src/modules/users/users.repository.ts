@@ -32,4 +32,27 @@ export class UsersRepository {
 
     return created;
   }
+
+  async findById(id: number): Promise<User | undefined> {
+    const result = await this.db.db
+      .select()
+      .from(users)
+      .where(eq(users.id, id))
+      .limit(1);
+
+    return result[0];
+  }
+
+  async updatePasswordHash(
+    userId: number,
+    passwordHash: string,
+  ): Promise<User | undefined> {
+    const [updated] = await this.db.db
+      .update(users)
+      .set({ passwordHash })
+      .where(eq(users.id, userId))
+      .returning();
+
+    return updated;
+  }
 }
