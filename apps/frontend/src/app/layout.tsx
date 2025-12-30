@@ -6,6 +6,7 @@ import Link from 'next/link';
 import { AuthProvider } from './auth-provider';
 import { getCurrentUser } from '@/lib/api/auth';
 import { SiteHeaderAuth } from '@/components/site-header-auth';
+import { Toaster } from '@/components/ui/sonner';
 
 export const metadata: Metadata = {
   title: 'Anor 移民服务',
@@ -74,6 +75,7 @@ export default async function RootLayout({ children }: { children: React.ReactNo
               </div>
             </footer>
           </div>
+          <Toaster />
         </AuthProvider>
       </body>
     </html>
