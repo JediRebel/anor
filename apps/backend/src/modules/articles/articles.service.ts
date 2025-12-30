@@ -150,7 +150,7 @@ export class ArticlesService {
       // 其他情况不动 publishedAt。
       publishedAt:
         dto.status === 'published'
-          ? (dto as any).publishedAt ?? new Date()
+          ? ((dto as any).publishedAt ?? new Date())
           : dto.status === 'draft'
             ? null
             : undefined,
