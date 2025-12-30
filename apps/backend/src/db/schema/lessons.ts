@@ -1,4 +1,5 @@
 // apps/backend/src/db/schema/lessons.ts
+
 import {
   boolean,
   integer,
@@ -9,6 +10,7 @@ import {
   uuid,
   uniqueIndex,
 } from 'drizzle-orm/pg-core';
+// 修正这里：必须是相对路径，直接指向 courses.ts
 import { courses } from './courses';
 
 export const lessonStatusEnum = pgEnum('lesson_status', ['draft', 'published']);
@@ -30,7 +32,7 @@ export const lessons = pgTable(
 
     type: lessonTypeEnum('type').notNull().default('video'),
 
-    // 二选一：视频/文本（后续再扩展为更复杂的内容结构）
+    // 二选一：视频/文本
     videoUrl: text('video_url'),
     contentText: text('content_text'),
 
@@ -52,7 +54,7 @@ export const lessons = pgTable(
       t.courseId,
       t.slug,
     ),
-    // 同一 course 下 order 唯一（避免两个课节都是第 1 节）
+    // 同一 course 下 order 唯一
     courseOrderUnique: uniqueIndex('lessons_course_order_unique').on(
       t.courseId,
       t.order,

@@ -13,6 +13,7 @@ import type {
   PublicLessonListItemDto,
 } from './courses.controller';
 
+// 补充定义：因为 listPublishedFreeCourses 用到了这个局部类型
 type FreeCourseListItemDto = {
   id: string;
   title: string;
@@ -27,10 +28,55 @@ type FreeCourseListItemDto = {
 
 import { DbService } from '../../db/db.service';
 import { courses, enrollments, lessons } from '../../db/schema';
+import type { NewCourse } from '../../db/schema';
 
 @Injectable()
 export class CoursesRepository {
   constructor(private readonly db: DbService) {}
+
+  // =================================================================
+  //  Admin Methods (For Management)
+  // =================================================================
+
+  async create(data: NewCourse) {
+    const rows = await this.db.db.insert(courses).values(data).returning();
+    return rows[0];
+  }
+
+  async update(id: string, data: Partial<NewCourse>) {
+    const rows = await this.db.db
+      .update(courses)
+      .set({ ...data, updatedAt: new Date() })
+      .where(eq(courses.id, id))
+      .returning();
+    return rows[0];
+  }
+
+  async delete(id: string) {
+    const rows = await this.db.db
+      .delete(courses)
+      .where(eq(courses.id, id))
+      .returning();
+    return rows[0];
+  }
+
+  async findByIdAdmin(id: string) {
+    const rows = await this.db.db
+      .select()
+      .from(courses)
+      .where(eq(courses.id, id))
+      .limit(1);
+    return rows[0] || null;
+  }
+
+  async findAllAdmin() {
+    // 管理端列表：按创建时间倒序，包含草稿和已发布
+    return this.db.db.select().from(courses).orderBy(desc(courses.createdAt));
+  }
+
+  // =================================================================
+  //  Public Methods (Existing)
+  // =================================================================
 
   /**
    * Public: list published courses

@@ -12,7 +12,6 @@ import {
   primaryKey,
 } from 'drizzle-orm/pg-core';
 
-
 import { users } from './users';
 
 /**
@@ -26,8 +25,12 @@ export const categories = pgTable(
     slug: varchar('slug', { length: 100 }).notNull(),
     description: varchar('description', { length: 255 }),
     sortOrder: integer('sort_order').notNull().default(0),
-    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
-    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+    createdAt: timestamp('created_at', { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true })
+      .notNull()
+      .defaultNow(),
   },
   (table) => ({
     slugUniqueIdx: uniqueIndex('categories_slug_unique').on(table.slug),
@@ -45,8 +48,12 @@ export const tags = pgTable(
     name: varchar('name', { length: 100 }).notNull(),
     slug: varchar('slug', { length: 100 }).notNull(),
     description: varchar('description', { length: 255 }),
-    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
-    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+    createdAt: timestamp('created_at', { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true })
+      .notNull()
+      .defaultNow(),
   },
   (table) => ({
     slugUniqueIdx: uniqueIndex('tags_slug_unique').on(table.slug),
@@ -86,8 +93,12 @@ export const articles = pgTable(
 
     publishedAt: timestamp('published_at', { withTimezone: true }),
 
-    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
-    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+    createdAt: timestamp('created_at', { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true })
+      .notNull()
+      .defaultNow(),
   },
   (table) => ({
     slugUniqueIdx: uniqueIndex('articles_slug_unique').on(table.slug),
