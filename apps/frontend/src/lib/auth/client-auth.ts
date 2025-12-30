@@ -18,18 +18,44 @@ export interface SessionPayload {
   user: AuthUser;
   mode: 'cookie';
 }
+function hasLoginStatusCookie(): boolean {
+  if (typeof document === 'undefined') return false; // 服务端渲染时无法读取
+  return document.cookie.split(';').some((item) => item.trim().startsWith('login_status='));
+}
 
-/**
- * Cookie session source of truth: GET /auth/me
- */
 export async function getSessionUser(): Promise<AuthUser | null> {
   try {
-    const res = await fetch(`${API_BASE}/auth/me`, {
-      // 登录的时候为什么要访问这个页面？取消这个访问可以吗？
+    // 1. 尝试直接获取用户信息
+    let res = await fetch(`${API_BASE}/auth/me`, {
       method: 'GET',
       credentials: 'include',
       cache: 'no-store',
     });
+
+    // 2. 如果 401，且本地有“曾登录过”的标记，才尝试刷新
+    if (res.status === 401) {
+      if (hasLoginStatusCookie()) {
+        try {
+          const refreshRes = await fetch(`${API_BASE}/auth/refresh`, {
+            method: 'POST',
+            credentials: 'include',
+            cache: 'no-store',
+          });
+
+          if (refreshRes.ok) {
+            // 刷新成功，重试获取用户信息
+            res = await fetch(`${API_BASE}/auth/me`, {
+              method: 'GET',
+              credentials: 'include',
+              cache: 'no-store',
+            });
+          }
+        } catch (e) {
+          // 忽略网络错误
+        }
+      }
+      // 如果没有 login_status cookie，说明是纯游客，直接跳过刷新，避免后端报错
+    }
 
     if (!res.ok) return null;
     return (await res.json()) as AuthUser;
@@ -37,7 +63,6 @@ export async function getSessionUser(): Promise<AuthUser | null> {
     return null;
   }
 }
-
 /**
  * Legacy: token storage is not used.
  */

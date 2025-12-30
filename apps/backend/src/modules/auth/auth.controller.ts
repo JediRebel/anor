@@ -46,6 +46,9 @@ const ACCESS_TOKEN_COOKIE = 'anor_at';
 const REFRESH_TOKEN_COOKIE = 'anor_rt';
 const REMEMBER_ME_COOKIE = 'anor_rm';
 
+// 定义一个新的标记 Cookie 名称
+const LOGIN_STATUS_COOKIE = 'login_status';
+
 function setAuthCookies(
   res: Response,
   tokens: { accessToken?: string; refreshToken?: string },
@@ -53,8 +56,7 @@ function setAuthCookies(
 ) {
   const { accessToken, refreshToken } = tokens;
 
-  // NOTE: For now we keep returning the JSON response body unchanged.
-  // These cookies enable a gradual migration to httpOnly-cookie auth + middleware redirects.
+  // 基础配置：HttpOnly，防止 XSS 读取 Token
   const base = {
     httpOnly: true,
     sameSite: 'lax' as const,
@@ -62,33 +64,36 @@ function setAuthCookies(
     path: '/',
   };
 
-  // User expectation:
-  // - Default: closing the browser logs the user out (session cookies -> no Expires/Max-Age).
-  // - Remember me: keep the refresh token for 7 days on this device.
   const rememberMe = opts?.rememberMe === true;
 
-  // Access-token cookie: session cookie by default (no Max-Age).
-  // The real lifetime is still governed by the JWT exp.
+  // 1. 设置 Access Token
   if (typeof accessToken === 'string' && accessToken.length > 0) {
     res.cookie(ACCESS_TOKEN_COOKIE, accessToken, {
       ...base,
     });
   }
 
-  // Refresh-token cookie: session cookie by default; persistent only when rememberMe is enabled.
+  // 2. 设置 Refresh Token
   if (typeof refreshToken === 'string' && refreshToken.length > 0) {
     res.cookie(REFRESH_TOKEN_COOKIE, refreshToken, {
       ...base,
       ...(rememberMe ? { maxAge: 1000 * 60 * 60 * 24 * 7 } : {}), // 7 days
     });
+
+    // [新增] 3. 设置登录状态标记 Cookie (非 HttpOnly，前端可读)
+    // 它的过期时间与 Refresh Token 保持一致
+    res.cookie(LOGIN_STATUS_COOKIE, '1', {
+      ...base,
+      httpOnly: false, // 关键：允许前端 JS 读取
+      ...(rememberMe ? { maxAge: 1000 * 60 * 60 * 24 * 7 } : {}),
+    });
   }
 
-  // Store a small marker so the server can preserve remember-me mode on /auth/refresh.
-  // (The server cannot infer cookie persistence from incoming requests.)
+  // 4. 设置 Remember Me 标记 (供后端逻辑使用)
   if (rememberMe) {
     res.cookie(REMEMBER_ME_COOKIE, '1', {
       ...base,
-      maxAge: 1000 * 60 * 60 * 24 * 7, // 7 days
+      maxAge: 1000 * 60 * 60 * 24 * 7,
     });
   } else {
     res.clearCookie(REMEMBER_ME_COOKIE, base);
@@ -97,16 +102,18 @@ function setAuthCookies(
 
 function clearAuthCookies(res: Response) {
   const base = {
-    httpOnly: true,
+    httpOnly: true, // 注意：清除 cookie 时 options 需要匹配
     sameSite: 'lax' as const,
     secure: isProd,
     path: '/',
   };
 
-  // Must match the cookie options used when setting cookies (path/sameSite/secure)
   res.clearCookie(ACCESS_TOKEN_COOKIE, base);
   res.clearCookie(REFRESH_TOKEN_COOKIE, base);
   res.clearCookie(REMEMBER_ME_COOKIE, base);
+
+  // [新增] 清除登录状态标记 (注意 httpOnly: false)
+  res.clearCookie(LOGIN_STATUS_COOKIE, { ...base, httpOnly: false });
 }
 
 function readRefreshTokenFromRequest(req: any, body: any): string | undefined {

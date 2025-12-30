@@ -1,65 +1,59 @@
 // apps/frontend/src/app/auth-provider.tsx
 'use client';
 
-import { createContext, useContext, useEffect, useMemo, useState, type ReactNode } from 'react';
-import { useRouter } from 'next/navigation';
+import { createContext, useContext, useEffect, useState, ReactNode } from 'react';
+import { getSessionUser } from '@/lib/auth/client-auth';
 import type { AuthUser } from '@/lib/api/auth';
-import { getSessionUser, logout as logoutSession } from '@/lib/auth/client-auth';
 
 interface AuthContextValue {
   user: AuthUser | null;
-  isAuthenticated: boolean;
-  // 跳转到登录页（cookie 由后端设置）；
-  login: () => Promise<void>;
-  // 调用后端 /auth/logout 清理会话（httpOnly cookies）
-  logout: () => Promise<void>;
+  loading: boolean;
+  setUser: (user: AuthUser | null) => void;
 }
 
-const AuthContext = createContext<AuthContextValue | undefined>(undefined);
+const AuthContext = createContext<AuthContextValue>({
+  user: null,
+  loading: true,
+  setUser: () => {},
+});
 
-export function AuthProvider({ children }: { children: ReactNode }) {
-  const router = useRouter();
-  const [user, setUser] = useState<AuthUser | null>(null);
+export function AuthProvider({
+  children,
+  initialUser, // 接收服务器端传来的初始用户状态
+}: {
+  children: ReactNode;
+  initialUser?: AuthUser | null;
+}) {
+  // 如果服务器已经拿到用户，初始状态就直接是该用户
+  const [user, setUser] = useState<AuthUser | null>(initialUser || null);
+  const [loading, setLoading] = useState(!initialUser);
 
-  // Cookie 模式：客户端无法同步读取 token，只能通过 /auth/me 获取当前会话用户
   useEffect(() => {
-    let cancelled = false;
+    // 页面加载时，检查一次最新的会话状态
+    // 这会触发 client-auth.ts 里的“自动刷新 Token”逻辑
+    async function initAuth() {
+      try {
+        const sessionUser = await getSessionUser();
+        if (sessionUser) {
+          setUser(sessionUser);
+        } else {
+          // 如果尝试刷新后依然没用户，且之前认为是 null，保持 null
+          // 如果之前有值（比如过期了），这里可以置空
+          if (!initialUser) setUser(null);
+        }
+      } catch (err) {
+        console.error('Auth check failed', err);
+      } finally {
+        setLoading(false);
+      }
+    }
 
-    (async () => {
-      const me = await getSessionUser();
-      if (!cancelled) setUser(me);
-    })();
+    initAuth();
+  }, [initialUser]);
 
-    return () => {
-      cancelled = true;
-    };
-  }, []);
-
-  const value = useMemo<AuthContextValue>(() => {
-    return {
-      user,
-      isAuthenticated: !!user,
-      async login() {
-        // cookie 登录流程由登录页触发；这里仅负责导航
-        router.push('/login');
-      },
-      async logout() {
-        await logoutSession();
-        setUser(null);
-        router.push('/');
-        // 退出后刷新一次路由数据，避免残留的“已登录”视图
-        router.refresh();
-      },
-    };
-  }, [router, user]);
-
-  return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
+  return <AuthContext.Provider value={{ user, loading, setUser }}>{children}</AuthContext.Provider>;
 }
 
 export function useAuth() {
-  const ctx = useContext(AuthContext);
-  if (!ctx) {
-    throw new Error('useAuth must be used within <AuthProvider />');
-  }
-  return ctx;
+  return useContext(AuthContext);
 }
