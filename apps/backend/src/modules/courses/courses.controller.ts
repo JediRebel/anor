@@ -1,6 +1,6 @@
 // apps/backend/src/modules/courses/courses.controller.ts
 
-import { Controller, Get, Param, Req, UseGuards } from '@nestjs/common';
+import { Controller, Get, Param, Req, UseGuards, Delete } from '@nestjs/common';
 import { AuthGuard } from '@nestjs/passport';
 import { CoursesService } from './courses.service';
 
@@ -93,7 +93,10 @@ export class CoursesController {
       priceCents: typeof c?.priceCents === 'number' ? c.priceCents : null,
     })) as PublicCourseListItemDto[];
   }
-
+  @Delete(':id')
+  async deleteCourse(@Param('id') id: string) {
+    return this.coursesService.deleteCourse(id);
+  }
   /**
    * Public: list published FREE courses (for "All Free Courses" entry)
    * - 未登录：isEnrolled 固定 false

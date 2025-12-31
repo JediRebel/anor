@@ -1,10 +1,13 @@
 // apps/backend/src/app.module.ts
 import { Module } from '@nestjs/common';
-import { ConfigModule } from '@nestjs/config'; // ✅ 新增
+import { ConfigModule } from '@nestjs/config';
+import { ServeStaticModule } from '@nestjs/serve-static';
+import { join } from 'path';
 import { AppController } from './app.controller';
 import { AppService } from './app.service';
-import { HealthModule } from './health/health.module'; // ✅ 预留（下一步会创建这个文件）
-import { DbModule } from './db/db.module'; // ✅ 新增
+import { HealthModule } from './health/health.module'; // ✅ [修改] 取消注释
+
+import { DbModule } from './db/db.module';
 import { AuthModule } from './modules/auth/auth.module';
 import { ArticlesModule } from './modules/articles/articles.module';
 import { UploadsModule } from './modules/uploads/uploads.module';
@@ -15,10 +18,17 @@ import { MeModule } from './modules/me/me.module';
   imports: [
     ConfigModule.forRoot({
       isGlobal: true,
-      envFilePath: ['.env.local', '.env'], // 后面可以按你实际情况调整
+      envFilePath: ['.env.local', '.env'],
+    }),
+    // 静态资源服务
+    ServeStaticModule.forRoot({
+      rootPath: join(process.cwd(), 'public'),
+      serveRoot: '/',
     }),
     DbModule,
-    HealthModule,
+
+    HealthModule, // ✅ [修改] 取消注释，启用它！
+
     AuthModule,
     ArticlesModule,
     UploadsModule,

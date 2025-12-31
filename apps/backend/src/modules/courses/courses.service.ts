@@ -41,13 +41,26 @@ export class CoursesService {
   }
 
   async createCourse(data: NewCourse) {
-    // 可以在这里增加 slug 唯一性检查，或者依赖数据库的 Unique Constraint 报错
     return this.coursesRepository.create(data);
   }
 
   async updateCourse(id: string, data: Partial<NewCourse>) {
-    await this.getCourseByIdAdmin(id); // Ensure exists
-    return this.coursesRepository.update(id, data);
+    // 1. 先获取当前课程信息，用于判断状态变化
+    const currentCourse = await this.getCourseByIdAdmin(id); // 内部已包含 NotFound 检查
+
+    const updatePayload = { ...data };
+
+    // 2. 核心逻辑：如果新状态是 'published'，且原课程没发布过（或发布时间为空），则自动写入当前时间
+    if (
+      updatePayload.status === 'published' &&
+      !currentCourse.publishedAt &&
+      !updatePayload.publishedAt // 防止覆盖前端可能传过来的特定时间
+    ) {
+      updatePayload.publishedAt = new Date();
+    }
+
+    // 3. 调用 Repository 更新 (Repository 会自动处理 updatedAt)
+    return this.coursesRepository.update(id, updatePayload);
   }
 
   async deleteCourse(id: string) {
@@ -82,16 +95,41 @@ export class CoursesService {
       order: newOrder,
     };
 
-    return this.lessonsRepository.create(payload);
+    const newLesson = await this.lessonsRepository.create(payload);
+
+    // [新增] 3. 课节变动，由于逻辑定义“课程更新时间”包含“课节更新”，
+    // 这里显式触发一次 Course 的更新 (Repository 会自动设置 updatedAt = now)
+    await this.coursesRepository.update(courseId, { updatedAt: new Date() });
+
+    return newLesson;
   }
 
   async updateLesson(id: string, data: Partial<NewLesson>) {
-    // 这里暂不处理 order 的复杂重排，仅支持修改基本信息
-    return this.lessonsRepository.update(id, data);
+    // 1. 更新课节
+    const updatedLesson = await this.lessonsRepository.update(id, data);
+
+    // [新增] 2. 如果更新成功，且能获取到 courseId，则触碰父级课程更新时间
+    if (updatedLesson && updatedLesson.courseId) {
+      await this.coursesRepository.update(updatedLesson.courseId, {
+        updatedAt: new Date(),
+      });
+    }
+
+    return updatedLesson;
   }
 
   async deleteLesson(id: string) {
-    return this.lessonsRepository.delete(id);
+    // 1. 删除课节
+    const deletedLesson = await this.lessonsRepository.delete(id);
+
+    // [新增] 2. 如果删除成功，则触碰父级课程更新时间
+    if (deletedLesson && deletedLesson.courseId) {
+      await this.coursesRepository.update(deletedLesson.courseId, {
+        updatedAt: new Date(),
+      });
+    }
+
+    return deletedLesson;
   }
 
   // =================================================================

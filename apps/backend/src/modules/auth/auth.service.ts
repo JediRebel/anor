@@ -32,7 +32,7 @@ export class AuthService {
     number
   > = {
     // 管理员：access 30 分钟
-    admin: 30 * 60,
+    admin: 1 * 60,
     // 付费用户：access 60 分钟（和普通用户保持一致，后续如需调整可单独修改）
     paid_user: 60 * 60,
     // 普通用户：access 60 分钟

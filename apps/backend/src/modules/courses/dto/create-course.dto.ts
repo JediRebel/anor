@@ -9,44 +9,50 @@ import {
   IsUrl,
   Min,
   Matches,
+  ValidateIf,
 } from 'class-validator';
-import { courseAccessTypeEnum, courseStatusEnum } from '../../../db/schema';
+import { courseStatusEnum, courseAccessTypeEnum } from '../../../db/schema';
 
 export class CreateCourseDto {
   @IsString()
-  @IsNotEmpty()
+  @IsNotEmpty({ message: '标题不能为空' })
   title!: string;
 
   @IsString()
-  @IsNotEmpty()
+  @IsNotEmpty({ message: 'Slug 不能为空' })
   @Matches(/^[a-z0-9-]+$/, {
-    message: 'Slug must only contain lowercase letters, numbers, and hyphens',
+    message: 'Slug 只能包含小写字母、数字和连字符',
   })
   slug!: string;
 
+  // [修改] 只有发布状态下，摘要才必填
+  @ValidateIf((o) => o.status === 'published')
   @IsString()
-  @IsOptional()
+  @IsNotEmpty({ message: '发布时必须填写摘要' })
   summary?: string;
 
+  // [修改] 只有发布状态下，描述才必填
+  @ValidateIf((o) => o.status === 'published')
   @IsString()
-  @IsOptional()
+  @IsNotEmpty({ message: '发布时必须填写详细描述' })
   description?: string;
 
-  @IsString()
+  // [修改] 只有发布状态下才校验 URL 格式，草稿允许为空
+  @ValidateIf(
+    (o) =>
+      o.status === 'published' || (o.coverImageUrl && o.coverImageUrl !== ''),
+  )
+  @IsUrl({}, { message: '封面图片必须是有效的 URL' })
   @IsOptional()
-  @IsUrl()
   coverImageUrl?: string;
 
   @IsEnum(courseAccessTypeEnum.enumValues)
-  @IsOptional()
-  accessType?: 'free' | 'paid';
+  accessType!: 'free' | 'paid';
 
   @IsInt()
   @Min(0)
-  @IsOptional()
-  priceCents?: number;
+  priceCents!: number;
 
   @IsEnum(courseStatusEnum.enumValues)
-  @IsOptional()
-  status?: 'draft' | 'published';
+  status!: 'draft' | 'published';
 }

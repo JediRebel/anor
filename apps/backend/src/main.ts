@@ -6,16 +6,14 @@ import { ValidationPipe } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { RequestLoggingInterceptor } from './common/logging.interceptor';
 import { HttpExceptionFilter } from './common/http-exception.filter';
-import { join } from 'path';
+// import { join } from 'path'; // 不再需要
 
 async function bootstrap() {
   const app = await NestFactory.create<NestExpressApplication>(AppModule, {
-    bufferLogs: true, // 为后面日志做准备，可留着
+    bufferLogs: true,
   });
 
-  // 解析 Cookie（用于 httpOnly cookie 携带 JWT）
-  // 不依赖 cookie-parser，避免在 monorepo 中出现依赖/类型缺失导致无法编译。
-  // 仅做最小实现：把 Cookie header 解析到 req.cookies，供后续 JWT extractor / guard 使用。
+  // 解析 Cookie
   app.use((req: any, _res: any, next: any) => {
     const header = req?.headers?.cookie;
     const cookies: Record<string, string> = {};
@@ -34,26 +32,26 @@ async function bootstrap() {
     next();
   });
 
-  // 全局参数校验：后面 Controller 用 DTO 时会自动生效
+  // 全局校验
   app.useGlobalPipes(
     new ValidationPipe({
-      whitelist: true, // 只保留 DTO 中声明的字段
-      forbidNonWhitelisted: true, // 出现多余字段直接报错
-      transform: true, // 自动类型转换（字符串 -> number 等）
+      whitelist: true,
+      forbidNonWhitelisted: true,
+      transform: true,
     }),
   );
-  app.useGlobalInterceptors(new RequestLoggingInterceptor());
 
-  app.useGlobalFilters(new HttpExceptionFilter()); // ✅ 全局异常过滤器
-  // 静态资源：暴露 apps/backend/public 目录，便于访问上传的封面图等文件
-  app.useStaticAssets(join(__dirname, '..', 'public'));
-  // 从 ConfigService 读取 BACKEND_PORT（由 apps/backend/.env 提供）
+  app.useGlobalInterceptors(new RequestLoggingInterceptor());
+  app.useGlobalFilters(new HttpExceptionFilter());
+
+  // ❌ 移除：app.useStaticAssets(join(__dirname, '..', 'public'));
+  // 已在 AppModule 中通过 ServeStaticModule 统一配置
+
   const configService = app.get(ConfigService);
   const port = configService.get<number>('BACKEND_PORT') ?? 4000;
 
-  // 这里开启 CORS，允许前端开发地址访问
   app.enableCors({
-    origin: 'http://localhost:3100', // 前端 dev 的地址
+    origin: 'http://localhost:3100',
     credentials: true,
   });
 
