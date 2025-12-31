@@ -3,8 +3,8 @@
 'use client';
 
 import Link from 'next/link';
-import { useQuery } from '@tanstack/react-query';
-import { Plus, Edit, Loader2 } from 'lucide-react';
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'; // [修改] 引入 mutation 和 queryClient
+import { Plus, Edit, Loader2, Trash2 } from 'lucide-react'; // [修改] 引入 Trash2 图标
 import { apiClient } from '@/lib/api-client';
 import { Button } from '@/components/ui/button';
 import {
@@ -16,7 +16,7 @@ import {
   TableRow,
 } from '@/components/ui/table';
 import { Badge } from '@/components/ui/badge';
-import { format } from 'date-fns';
+import { toast } from 'sonner'; // [修改] 引入 toast
 
 type Course = {
   id: string;
@@ -26,10 +26,24 @@ type Course = {
   accessType: 'free' | 'paid';
   priceCents: number;
   publishedAt: string | null;
+  updatedAt: string;
   createdAt: string;
 };
 
+function formatDate(dateStr: string | null) {
+  if (!dateStr) return '-';
+  return new Date(dateStr).toLocaleString('zh-CN', {
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+  });
+}
+
 export default function CoursesAdminPage() {
+  const queryClient = useQueryClient(); // [新增]
+
+  // 获取列表
   const {
     data: courses,
     isLoading,
@@ -37,11 +51,34 @@ export default function CoursesAdminPage() {
   } = useQuery<Course[]>({
     queryKey: ['admin', 'courses'],
     queryFn: async () => {
-      // [修正]：直接返回 res，因为 apiClient 已经处理了解析
       const res = await apiClient.get<Course[]>('/admin/courses');
       return res;
     },
   });
+
+  // [新增] 删除请求的 Mutation
+  const deleteMutation = useMutation({
+    mutationFn: async (id: string) => {
+      // 调用后端 DELETE 接口
+      await apiClient.delete(`/admin/courses/${id}`);
+    },
+    onSuccess: () => {
+      toast.success('课程已删除');
+      // 刷新列表
+      queryClient.invalidateQueries({ queryKey: ['admin', 'courses'] });
+    },
+    onError: (error: any) => {
+      const msg = error.response?.data?.message || error.message || '删除失败';
+      toast.error(`删除失败: ${msg}`);
+    },
+  });
+
+  // [新增] 删除处理函数
+  const handleDelete = (id: string) => {
+    if (confirm('确定要删除这个课程吗？与之相关的课节也将被删除，此操作无法撤销。')) {
+      deleteMutation.mutate(id);
+    }
+  };
 
   if (isLoading) {
     return (
@@ -75,19 +112,20 @@ export default function CoursesAdminPage() {
         <Table>
           <TableHeader>
             <TableRow>
-              <TableHead className="w-[300px]">课程标题</TableHead>
+              <TableHead className="w-[250px]">课程标题</TableHead>
               <TableHead>Slug</TableHead>
               <TableHead>类型</TableHead>
               <TableHead>价格</TableHead>
               <TableHead>状态</TableHead>
               <TableHead>发布时间</TableHead>
+              <TableHead>最后更新</TableHead>
               <TableHead className="text-right">操作</TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
             {!courses || courses.length === 0 ? (
               <TableRow>
-                <TableCell colSpan={7} className="h-24 text-center">
+                <TableCell colSpan={8} className="h-24 text-center">
                   暂无课程
                 </TableCell>
               </TableRow>
@@ -135,7 +173,10 @@ export default function CoursesAdminPage() {
                     )}
                   </TableCell>
                   <TableCell className="text-sm text-slate-500">
-                    {course.publishedAt ? format(new Date(course.publishedAt), 'yyyy-MM-dd') : '-'}
+                    {formatDate(course.publishedAt)}
+                  </TableCell>
+                  <TableCell className="text-sm text-slate-500">
+                    {formatDate(course.updatedAt)}
                   </TableCell>
                   <TableCell className="text-right space-x-2">
                     <Link href={`/courses/admin/${course.id}/edit`}>
@@ -143,6 +184,20 @@ export default function CoursesAdminPage() {
                         <Edit className="mr-2 h-4 w-4" /> 编辑 & 课节
                       </Button>
                     </Link>
+                    {/* [新增] 删除按钮 */}
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      className="text-red-500 hover:text-red-600 hover:bg-red-50"
+                      onClick={() => handleDelete(course.id)}
+                      disabled={deleteMutation.isPending}
+                    >
+                      {deleteMutation.isPending ? (
+                        <Loader2 className="h-4 w-4 animate-spin" />
+                      ) : (
+                        <Trash2 className="h-4 w-4" />
+                      )}
+                    </Button>
                   </TableCell>
                 </TableRow>
               ))

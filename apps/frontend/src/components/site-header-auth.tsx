@@ -2,7 +2,7 @@
 'use client';
 
 import Link from 'next/link';
-import { useAuth } from '@/app/auth-provider';
+import { useAuth } from '@/components/auth-provider';
 import { useEffect, useState } from 'react';
 
 interface SiteHeaderAuthProps {

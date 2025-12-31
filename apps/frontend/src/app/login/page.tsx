@@ -5,6 +5,8 @@ import { useRef, useState } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import Link from 'next/link';
 import { apiClient, ApiError } from '@/lib/api-client';
+import { useAuth } from '@/components/auth-provider';
+//  [新增] 引入 useAuth
 import type { AuthUser } from '@/lib/api/auth';
 
 type LoginResponse = {
@@ -14,6 +16,7 @@ type LoginResponse = {
 export default function LoginPage() {
   const router = useRouter();
   const searchParams = useSearchParams();
+  const { refresh } = useAuth(); // ✅ [新增] 获取刷新方法
 
   const [email, setEmail] = useState('admin@anorvisa.com');
   const [password, setPassword] = useState('');
@@ -44,6 +47,10 @@ export default function LoginPage() {
         rememberMe,
       });
 
+      // ✅ [关键新增] 登录成功后，立即手动刷新全局 auth 状态
+      // 这样导航栏会立即从“登录”变成“我的”
+      await refresh();
+
       // 使用后端 Set-Cookie 写入 httpOnly cookie；前端不保存任何 token 或本地凭证。
       // 如果 URL 中带有 redirect 参数（例如 /login?redirect=/articles/admin/new），则优先跳回该地址；
       // 否则根据角色采用默认跳转策略：
@@ -53,12 +60,11 @@ export default function LoginPage() {
       const defaultTarget = result?.user?.role === 'admin' ? '/articles/admin' : '/me';
       const target = redirect && redirect.startsWith('/') ? redirect : defaultTarget;
 
-      // 由于 RootLayout 是 Server Component（读取 cookies 渲染导航），
-      // 登录成功后需要 refresh 一次，确保导航栏立刻从“登录”切换为“我的”。
-      // 使用 replace 避免把 /login 留在历史记录中。
+      // 跳转页面
       router.replace(target);
 
       // 确保导航发生后再触发 refresh，让 Server Components（RootLayout）重新读取 cookies。
+      // 虽然前端 Context 已经更新了，但为了保险起见（特别是混合渲染模式下），保留这个 refresh 也是好的。
       setTimeout(() => {
         router.refresh();
       }, 0);
@@ -161,7 +167,6 @@ export default function LoginPage() {
           </button>
         </form>
 
-        {/* 原来的“仅支持管理员登录”提示删除 */}
         <p className="mt-4 text-center text-xs text-slate-500">
           还没有账号？请先前往{' '}
           <Link href="/register" className="text-blue-600 underline underline-offset-2">

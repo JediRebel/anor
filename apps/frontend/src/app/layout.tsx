@@ -3,7 +3,7 @@ import { QueryProvider } from './query-provider';
 import type { Metadata } from 'next';
 import './globals.css';
 import Link from 'next/link';
-import { AuthProvider } from './auth-provider';
+import { AuthProvider } from '@/components/auth-provider';
 import { getCurrentUser } from '@/lib/api/auth';
 import { SiteHeaderAuth } from '@/components/site-header-auth';
 import { Toaster } from '@/components/ui/sonner';

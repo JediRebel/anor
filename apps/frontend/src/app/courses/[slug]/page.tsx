@@ -4,9 +4,15 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useParams, useRouter, useSearchParams } from 'next/navigation';
 import Link from 'next/link';
+import { Pencil } from 'lucide-react'; // [新增] 引入图标
 
 import type { AuthUser } from '@/lib/api/auth';
 
+// ... (类型定义和 apiBaseUrl 辅助函数保持不变，省略以节省篇幅，请保留原有的) ...
+// 必须保留的辅助函数和类型:
+// MyCourseListItemDto, getMyCourses, PublicCourseDetailDto, PublicLessonListItemDto, PublicLessonDetailDto, apiBaseUrl, getCourse, getLessons, getLessonDetail
+
+// 为了完整性，这里补上你需要保留的 helper imports/definitions
 type MyCourseListItemDto = {
   courseId: string;
   title: string;
@@ -40,6 +46,9 @@ type PublicCourseDetailDto = {
   description: string | null;
   coverImageUrl: string | null;
   publishedAt: string | null;
+  updatedAt?: string | null; // 新增
+  priceCents: number; // 确保有这个
+  accessType: 'free' | 'paid'; // 确保有这个
 };
 
 type PublicLessonListItemDto = {
@@ -64,7 +73,6 @@ type PublicLessonDetailDto = {
 };
 
 function apiBaseUrl() {
-  // Use || (not ??) to avoid empty-string env values.
   const envUrl = process.env.NEXT_PUBLIC_API_BASE_URL || '';
   const url = envUrl.trim() ? envUrl.trim() : 'http://localhost:3001';
   return url.replace(/\/+$/, '');
@@ -148,6 +156,8 @@ export default function CourseDetailPage() {
 
   const [currentUser, setCurrentUser] = useState<AuthUser | null>(null);
   const hasAuth = Boolean(currentUser);
+  // [新增] 判断是否管理员
+  const isAdmin = currentUser?.role === 'admin';
 
   // 检查当前用户登录状态
   useEffect(() => {
@@ -162,7 +172,6 @@ export default function CourseDetailPage() {
         });
 
         if (!res.ok) {
-          // Not logged in (or session invalid) is normal.
           if (!cancelled) setCurrentUser(null);
           return;
         }
@@ -181,7 +190,7 @@ export default function CourseDetailPage() {
     };
   }, []);
 
-  // 若已登录：判断当前用户是否已开通本课程（用于更准确的“解锁提示”）
+  // 若已登录：判断当前用户是否已开通本课程
   useEffect(() => {
     let cancelled = false;
 
@@ -198,11 +207,6 @@ export default function CourseDetailPage() {
         const enrolled = myCourses.some((c) => c.slug === courseSlug);
         setIsEnrolled(enrolled);
       } catch (e: any) {
-        const status: number | undefined = e?.status ?? e?.response?.status;
-        if (status === 401 || status === 403) {
-          if (!cancelled) setIsEnrolled(null);
-          return;
-        }
         if (!cancelled) setIsEnrolled(null);
       }
     }
@@ -242,7 +246,7 @@ export default function CourseDetailPage() {
     };
   }, [courseSlug]);
 
-  // 若未指定 lesson 参数：仅在页面内部自动选中一个默认课节（优先免费试看），不改写 URL
+  // 自动选中默认课节
   useEffect(() => {
     if (selectedLessonSlug) return;
     if (implicitLessonSlug) return;
@@ -317,7 +321,31 @@ export default function CourseDetailPage() {
     <div className="mx-auto max-w-5xl px-4 py-8">
       <div className="mb-6 flex items-start justify-between gap-4">
         <div className="min-w-0">
-          <h1 className="truncate text-2xl font-semibold text-slate-900">{course.title}</h1>
+          <div className="flex items-center gap-3">
+            <h1 className="truncate text-2xl font-semibold text-slate-900">{course.title}</h1>
+            {/* [新增] 管理员的编辑按钮 */}
+            {isAdmin && (
+              <Link
+                href={`/courses/admin/${course.id}/edit`}
+                className="inline-flex items-center rounded-md bg-slate-100 px-2 py-1 text-xs font-medium text-slate-600 hover:bg-slate-200 hover:text-slate-900"
+                title="编辑课程"
+              >
+                <Pencil className="mr-1 h-3 w-3" />
+                编辑
+              </Link>
+            )}
+          </div>
+
+          {/* [新增] 时间信息展示 */}
+          <div className="mt-2 flex items-center gap-4 text-xs text-slate-500">
+            {course.publishedAt && (
+              <span>发布于 {new Date(course.publishedAt).toLocaleDateString()}</span>
+            )}
+            {course.updatedAt && (
+              <span>最后更新 {new Date(course.updatedAt).toLocaleDateString()}</span>
+            )}
+          </div>
+
           {course.summary ? (
             <p className="mt-2 text-sm text-slate-600">{course.summary}</p>
           ) : (
@@ -384,8 +412,8 @@ export default function CourseDetailPage() {
                       <div className="min-w-0">
                         <div className="truncate text-sm font-medium text-slate-900">{l.title}</div>
                         <div className="mt-1 text-[11px] text-slate-500">
-                          第 {l.order} 节 · {l.type === 'video' ? '视频' : '图文'} ·{' '}
-                          {l.isFreePreview ? '免费试看' : '需解锁'}
+                          {/* [修改] 移除了“免费试看”或“需解锁”字样 */}第 {l.order} 节 ·{' '}
+                          {l.type === 'video' ? '视频' : '图文'}
                         </div>
                       </div>
                       <span className="shrink-0 rounded bg-slate-200 px-2 py-1 text-[10px] text-slate-700">

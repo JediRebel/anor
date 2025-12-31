@@ -1,596 +1,407 @@
 // apps/frontend/src/app/articles/admin/page.tsx
+
 'use client';
 
-import React, { useEffect, useMemo, useState } from 'react';
+import { useState, useMemo } from 'react';
 import Link from 'next/link';
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { Plus, Edit, Loader2, Trash2, Pin, PinOff, ArrowUpDown, Search } from 'lucide-react';
+import { apiClient } from '@/lib/api-client';
+import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
+import { Checkbox } from '@/components/ui/checkbox';
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from '@/components/ui/table';
+import { Badge } from '@/components/ui/badge';
+import { toast } from 'sonner';
 
-type ArticleStatus = 'draft' | 'published';
-
-interface Article {
+// 类型定义
+type Article = {
   id: number;
   title: string;
   slug: string;
   summary: string | null;
-  content: string | null;
   coverImageUrl: string | null;
-  status: ArticleStatus;
+  status: 'draft' | 'published';
   isPinned: boolean;
   viewCount: number;
-  categoryId: number | null;
-  authorId: number | null;
   publishedAt: string | null;
   createdAt: string;
-  updatedAt: string;
-}
+};
 
-interface AdminArticlesResponse {
-  items: Article[];
-  total: number;
-  page: number;
-  pageSize: number;
-}
-
+// 排序类型
 type SortBy = 'title' | 'viewCount' | 'createdAt' | 'publishedAt';
 type SortOrder = 'asc' | 'desc';
 
-const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL ?? 'http://localhost:3001';
-
-function formatDateTime(iso: string | null): string {
-  if (!iso) return '-';
-  const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return '-';
-  return d.toLocaleString('zh-CN', {
-    year: 'numeric',
+// 时间格式化
+function formatDateTime(dateStr: string | null) {
+  if (!dateStr) return '-';
+  return new Date(dateStr).toLocaleString('zh-CN', {
     month: '2-digit',
     day: '2-digit',
     hour: '2-digit',
     minute: '2-digit',
-    second: '2-digit',
   });
 }
 
-function classNames(...cls: Array<string | false | null | undefined>) {
-  return cls.filter(Boolean).join(' ');
-}
-
-async function readApiErrorMessage(res: Response) {
-  try {
-    const data = await res.json();
-    const msg = (data as any)?.message;
-    if (typeof msg === 'string' && msg.trim()) return msg.trim();
-    if (Array.isArray(msg) && msg.length) return msg.join('; ');
-    if (typeof (data as any)?.error === 'string' && (data as any).error.trim())
-      return (data as any).error.trim();
-  } catch {
-    // ignore
-  }
-  return `请求失败（HTTP ${res.status}）`;
-}
-
-/**
- * 非 admin（未登录 / 普通用户等）访问后台列表时显示的 “伪 404” 页。
- * 不跳转、不清理登录状态。
- */
-function AdminNotFound() {
-  return (
-    <main className="mx-auto max-w-3xl px-4 py-16">
-      <h1 className="mb-4 text-3xl font-bold tracking-tight">404 页面不存在</h1>
-      <p className="mb-6 text-sm text-gray-600">您访问的页面不存在。</p>
-      <Link
-        href="/"
-        className="inline-flex items-center rounded-md bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700"
-      >
-        返回首页
-      </Link>
-    </main>
-  );
-}
-
 export default function ArticlesAdminPage() {
-  const [articles, setArticles] = useState<Article[]>([]);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const queryClient = useQueryClient();
 
+  // ==== 状态管理 ====
   const [search, setSearch] = useState('');
   const [sortBy, setSortBy] = useState<SortBy>('createdAt');
   const [sortOrder, setSortOrder] = useState<SortOrder>('desc');
   const [onlyWithCover, setOnlyWithCover] = useState(false);
-  const [onlyWithoutCover, setOnlyWithoutCover] = useState(false);
 
-  // ==== 登录 / 角色检查 ====
-  const [checkedAuth, setCheckedAuth] = useState(false);
-  const [isAdmin, setIsAdmin] = useState(false);
+  // ==== 1. 获取数据 (使用 React Query) ====
+  const {
+    data: articlesData,
+    isLoading,
+    isError,
+  } = useQuery<any>({
+    queryKey: ['admin', 'articles'],
+    queryFn: async () => {
+      // 注意：这里假设后端支持一次性拉取所有数据用于前端排序
+      // 如果数据量巨大，后续需要在后端实现搜索和排序
+      const res = await apiClient.get('/admin/articles?pageSize=1000');
+      return res;
+    },
+  });
 
-  // 使用后端 /auth/me（httpOnly cookie）判断是否管理员。
+  // 处理后端返回结构 (可能是 { items: [...] } 或直接 [...])
+  const articles: Article[] = Array.isArray(articlesData)
+    ? articlesData
+    : articlesData?.items || [];
 
-  useEffect(() => {
-    if (typeof window === 'undefined') return;
-
-    let cancelled = false;
-
-    (async () => {
-      try {
-        const res = await fetch(`${API_BASE}/auth/me`, {
-          method: 'GET',
-          credentials: 'include',
-          cache: 'no-store',
-        });
-
-        if (!res.ok) {
-          if (!cancelled) {
-            setIsAdmin(false);
-            setCheckedAuth(true);
-          }
-          return;
-        }
-
-        const me = (await res.json()) as { role?: string };
-        if (!cancelled) {
-          setIsAdmin(me?.role === 'admin');
-          setCheckedAuth(true);
-        }
-      } catch {
-        if (!cancelled) {
-          setIsAdmin(false);
-          setCheckedAuth(true);
-        }
-      }
-    })();
-
-    return () => {
-      cancelled = true;
-    };
-  }, []);
-
-  // ==== 只有在“已经确认是 admin”之后，才去请求后台列表 ====
-  useEffect(() => {
-    if (!checkedAuth) return;
-
-    // 不是 admin（包括未登录 / 普通用户）直接结束，不请求接口
-    if (!isAdmin) {
-      setLoading(false);
-      return;
-    }
-
-    let cancelled = false;
-
-    const fetchArticles = async () => {
-      setLoading(true);
-      setError(null);
-
-      try {
-        const res = await fetch(`${API_BASE}/admin/articles?page=1&pageSize=200`, {
-          method: 'GET',
-          credentials: 'include',
-          cache: 'no-store',
-        });
-
-        if (res.status === 401 || res.status === 403) {
-          const msg = await readApiErrorMessage(res);
-          if (!cancelled) {
-            setError(msg || '当前管理员登录已过期，请重新登录后再访问后台文章列表。');
-            setArticles([]);
-          }
-          return;
-        }
-
-        if (!res.ok) {
-          const msg = await readApiErrorMessage(res);
-          if (!cancelled) setError(msg || '加载文章列表失败，请稍后重试。');
-          return;
-        }
-
-        const data = (await res.json()) as AdminArticlesResponse;
-        if (!cancelled) setArticles(data.items ?? []);
-      } catch {
-        if (!cancelled) setError('加载文章列表失败，请稍后重试。');
-      } finally {
-        if (!cancelled) setLoading(false);
-      }
-    };
-
-    fetchArticles();
-
-    return () => {
-      cancelled = true;
-    };
-  }, [checkedAuth, isAdmin]);
-
-  const handleTogglePin = async (id: number, current: boolean) => {
-    try {
-      const res = await fetch(`${API_BASE}/admin/articles/${id}/pin`, {
-        method: 'PATCH',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        credentials: 'include',
-        body: JSON.stringify({ isPinned: !current }),
-      });
-
-      if (res.status === 401 || res.status === 403) {
-        const msg = await readApiErrorMessage(res);
-        setError(msg || '当前管理员登录已过期，请重新登录后再尝试修改置顶状态。');
-        return;
-      }
-
-      if (!res.ok) {
-        const msg = await readApiErrorMessage(res);
-        setError(msg || '置顶状态修改失败，请稍后重试。');
-        return;
-      }
-
-      const updated = (await res.json()) as Article;
-      setArticles((prev) => prev.map((a) => (a.id === id ? updated : a)));
-    } catch {
-      setError('置顶状态修改失败，请稍后重试。');
-    }
-  };
-
-  const handleDelete = async (id: number) => {
-    if (!confirm('确定要删除这篇文章吗？此操作不可恢复。')) return;
-
-    try {
-      const res = await fetch(`${API_BASE}/admin/articles/${id}`, {
-        method: 'DELETE',
-        credentials: 'include',
-      });
-
-      if (res.status === 401 || res.status === 403) {
-        const msg = await readApiErrorMessage(res);
-        setError(msg || '当前管理员登录已过期，请重新登录后再尝试删除文章。');
-        return;
-      }
-
-      if (!res.ok) {
-        const msg = await readApiErrorMessage(res);
-        setError(msg || '删除失败，请稍后再试。');
-        return;
-      }
-
-      setArticles((prev) => prev.filter((a) => a.id !== id));
-    } catch {
-      setError('删除失败，请稍后再试。');
-    }
-  };
-
-  const handleEdit = (id: number) => {
-    window.location.href = `/articles/admin/${id}/edit`;
-  };
-
-  /**
-   * 点击表头排序
-   */
-  const handleSortClick = (field: SortBy) => {
-    if (field === sortBy) {
-      setSortOrder((prev) => (prev === 'asc' ? 'desc' : 'asc'));
-      return;
-    }
-    setSortBy(field);
-    setSortOrder(field === 'title' ? 'asc' : 'desc');
-  };
-
-  const renderSortIndicator = (field: SortBy) => {
-    if (sortBy !== field) return null;
-    return sortOrder === 'asc' ? ' ↑' : ' ↓';
-  };
-
-  const filteredAndSorted = useMemo(() => {
-    const keyword = search.trim().toLowerCase();
-
+  // ==== 2. 本地过滤与排序逻辑 ====
+  const filteredAndSortedArticles = useMemo(() => {
     let list = [...articles];
 
-    // 封面过滤：只看有封面 / 只看无封面；如果两个都勾选则视为不过滤
-    if (onlyWithCover && !onlyWithoutCover) {
+    // 搜索过滤
+    if (search.trim()) {
+      const keyword = search.trim().toLowerCase();
+      list = list.filter(
+        (a) =>
+          a.title.toLowerCase().includes(keyword) ||
+          a.slug.toLowerCase().includes(keyword) ||
+          (a.summary && a.summary.toLowerCase().includes(keyword)),
+      );
+    }
+
+    // 封面过滤
+    if (onlyWithCover) {
       list = list.filter((a) => !!a.coverImageUrl);
-    } else if (!onlyWithCover && onlyWithoutCover) {
-      list = list.filter((a) => !a.coverImageUrl);
     }
 
-    if (keyword) {
-      list = list.filter((a) => {
-        const title = a.title?.toLowerCase() ?? '';
-        const summary = a.summary?.toLowerCase() ?? '';
-        return (
-          title.includes(keyword) ||
-          summary.includes(keyword) ||
-          a.slug.toLowerCase().includes(keyword)
-        );
-      });
-    }
-
+    // 排序逻辑
     list.sort((a, b) => {
+      // 1. 置顶优先
       if (a.isPinned !== b.isPinned) {
         return a.isPinned ? -1 : 1;
       }
 
+      // 2. 字段排序
       const dir = sortOrder === 'asc' ? 1 : -1;
+      let valA: any = a[sortBy];
+      let valB: any = b[sortBy];
 
-      const getFieldValue = (article: Article) => {
-        switch (sortBy) {
-          case 'title':
-            return article.title || '';
-          case 'viewCount':
-            return article.viewCount ?? 0;
-          case 'createdAt': {
-            const t = new Date(article.createdAt).getTime();
-            return Number.isNaN(t) ? 0 : t;
-          }
-          case 'publishedAt': {
-            if (!article.publishedAt) return 0;
-            const t = new Date(article.publishedAt).getTime();
-            return Number.isNaN(t) ? 0 : t;
-          }
-          default:
-            return '';
-        }
-      };
-
-      const va = getFieldValue(a);
-      const vb = getFieldValue(b);
-
-      if (typeof va === 'number' && typeof vb === 'number') {
-        if (va === vb) return b.id - a.id;
-        return (va - vb) * dir;
+      // 特殊处理日期字符串
+      if (sortBy === 'createdAt' || sortBy === 'publishedAt') {
+        valA = new Date(valA || 0).getTime();
+        valB = new Date(valB || 0).getTime();
       }
 
-      const sa = String(va);
-      const sb = String(vb);
-      if (sa === sb) return b.id - a.id;
-      return sa.localeCompare(sb) * dir;
+      if (valA === valB) return 0;
+      return (valA > valB ? 1 : -1) * dir;
     });
 
     return list;
-  }, [articles, search, sortBy, sortOrder, onlyWithCover, onlyWithoutCover]);
+  }, [articles, search, onlyWithCover, sortBy, sortOrder]);
 
-  // ==== 视图渲染 ====
+  // ==== 3. Mutation: 删除文章 ====
+  const deleteMutation = useMutation({
+    mutationFn: async (id: number) => {
+      await apiClient.delete(`/admin/articles/${id}`);
+    },
+    onSuccess: () => {
+      toast.success('文章已删除');
+      queryClient.invalidateQueries({ queryKey: ['admin', 'articles'] });
+    },
+    onError: (error: any) => {
+      toast.error(`删除失败: ${error.message || '未知错误'}`);
+    },
+  });
 
-  // 还在检查本地登录状态
-  if (!checkedAuth) {
+  // ==== 4. Mutation: 切换置顶 ====
+  const pinMutation = useMutation({
+    mutationFn: async ({ id, isPinned }: { id: number; isPinned: boolean }) => {
+      await apiClient.patch(`/admin/articles/${id}/pin`, { isPinned });
+    },
+    onSuccess: () => {
+      toast.success('置顶状态已更新');
+      queryClient.invalidateQueries({ queryKey: ['admin', 'articles'] });
+    },
+    onError: () => {
+      toast.error('操作失败');
+    },
+  });
+
+  // ==== 事件处理 ====
+  const handleDelete = (id: number) => {
+    if (confirm('确定要删除这篇文章吗？此操作无法撤销。')) {
+      deleteMutation.mutate(id);
+    }
+  };
+
+  const handleTogglePin = (id: number, currentStatus: boolean) => {
+    pinMutation.mutate({ id, isPinned: !currentStatus });
+  };
+
+  const handleSort = (field: SortBy) => {
+    if (sortBy === field) {
+      setSortOrder(sortOrder === 'asc' ? 'desc' : 'asc');
+    } else {
+      setSortBy(field);
+      setSortOrder('desc');
+    }
+  };
+
+  // 渲染排序图标
+  const SortIcon = ({ field }: { field: SortBy }) => {
+    if (sortBy !== field) return <ArrowUpDown className="ml-1 h-3 w-3 text-slate-300" />;
     return (
-      <main className="mx-auto max-w-3xl px-4 py-10">
-        <p className="text-sm text-gray-500">正在检查登录状态…</p>
-      </main>
+      <ArrowUpDown
+        className={`ml-1 h-3 w-3 ${sortOrder === 'asc' ? 'rotate-180' : ''} text-slate-900 transition-transform`}
+      />
+    );
+  };
+
+  if (isLoading) {
+    return (
+      <div className="flex justify-center items-center py-20">
+        <Loader2 className="animate-spin h-8 w-8 text-slate-400" />
+      </div>
     );
   }
 
-  // 非 admin（未登录 / 普通用户 / 付费用户等）：显示 404 风格页面
-  if (!isAdmin) {
-    return <AdminNotFound />;
+  if (isError) {
+    return <div className="py-10 text-center text-red-500">加载失败，请检查网络或权限。</div>;
   }
 
-  // 真正 admin 才会看到的后台列表
   return (
-    <main className="mx-auto max-w-6xl px-4 py-10">
-      <div className="mb-6">
-        <div className="flex flex-wrap items-center justify-between gap-3">
-          <div>
-            <h1 className="text-2xl font-bold">文章管理（后台）</h1>
-            <p className="mt-1 text-sm text-gray-600">
-              这里显示数据库中的文章列表（包含草稿和已发布）。列表按「置顶优先 +
-              可选排序字段」显示。
-            </p>
-          </div>
+    <div className="container mx-auto py-10 space-y-6">
+      {/* 顶部标题与操作 */}
+      <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
+        <div>
+          <h1 className="text-3xl font-bold tracking-tight">文章管理</h1>
+          <p className="text-slate-500 mt-1">管理所有发布的文章内容与状态</p>
+        </div>
+        <Link href="/articles/admin/new">
+          <Button>
+            <Plus className="mr-2 h-4 w-4" /> 新建文章
+          </Button>
+        </Link>
+      </div>
+
+      {/* 筛选工具栏 */}
+      <div className="flex flex-col sm:flex-row items-start sm:items-center gap-4 bg-slate-50 p-4 rounded-lg border">
+        <div className="relative w-full sm:w-72">
+          <Search className="absolute left-2 top-2.5 h-4 w-4 text-slate-400" />
+          <Input
+            placeholder="搜索标题、Slug..."
+            className="pl-8 bg-white"
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+          />
         </div>
 
-        {/* 过滤器区域：两行布局 */}
-        <div className="mt-4 flex flex-col gap-3">
-          {/* 第一行：搜索 + 新建文章 */}
-          <div className="flex flex-wrap items-center gap-3">
-            <input
-              type="text"
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
-              placeholder="按标题 / 摘要 / SLUG 搜索"
-              className="min-w-[220px] flex-1 rounded-md border border-gray-300 px-3 py-1 text-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500"
-            />
+        <div className="flex items-center space-x-2">
+          <Checkbox
+            id="cover-filter"
+            checked={onlyWithCover}
+            onCheckedChange={(checked) => setOnlyWithCover(checked as boolean)}
+          />
+          <label
+            htmlFor="cover-filter"
+            className="text-sm font-medium leading-none peer-disabled:cursor-not-allowed peer-disabled:opacity-70 cursor-pointer"
+          >
+            只看有封面的
+          </label>
+        </div>
 
-            <Link
-              href="/articles/admin/new"
-              className="inline-flex shrink-0 items-center rounded-full bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700"
-            >
-              新建文章
-            </Link>
-          </div>
-
-          {/* 第二行：封面过滤 + 查看前台文章列表 */}
-          <div className="flex flex-wrap items-center gap-4 text-xs text-gray-600">
-            <label className="flex items-center gap-1">
-              <input
-                type="checkbox"
-                checked={onlyWithCover}
-                onChange={(e) => setOnlyWithCover(e.target.checked)}
-                className="h-3.5 w-3.5 rounded border-gray-300 text-blue-600 focus:ring-blue-500"
-              />
-              只看有封面文章
-            </label>
-
-            <label className="flex items-center gap-1">
-              <input
-                type="checkbox"
-                checked={onlyWithoutCover}
-                onChange={(e) => setOnlyWithoutCover(e.target.checked)}
-                className="h-3.5 w-3.5 rounded border-gray-300 text-blue-600 focus:ring-blue-500"
-              />
-              只看无封面文章
-            </label>
-
-            <Link
-              href="/articles"
-              className="ml-auto inline-flex items-center rounded-full border border-gray-300 px-4 py-2 text-sm text-gray-700 hover:border-gray-400"
-            >
-              查看前台文章列表
-            </Link>
-          </div>
+        <div className="ml-auto text-xs text-slate-500">
+          共 {filteredAndSortedArticles.length} 篇
         </div>
       </div>
 
-      {error && (
-        <div className="mb-4 rounded-md bg-red-50 px-4 py-3 text-sm text-red-700">{error}</div>
-      )}
+      {/* 表格区域 */}
+      <div className="border rounded-md">
+        <Table>
+          <TableHeader>
+            <TableRow>
+              <TableHead className="w-[80px]">封面</TableHead>
+              <TableHead
+                className="w-[300px] cursor-pointer hover:bg-slate-50"
+                onClick={() => handleSort('title')}
+              >
+                <div className="flex items-center">
+                  标题 <SortIcon field="title" />
+                </div>
+              </TableHead>
+              <TableHead>Slug</TableHead>
+              <TableHead>状态</TableHead>
+              <TableHead
+                className="cursor-pointer hover:bg-slate-50"
+                onClick={() => handleSort('viewCount')}
+              >
+                <div className="flex items-center">
+                  浏览 <SortIcon field="viewCount" />
+                </div>
+              </TableHead>
+              <TableHead
+                className="cursor-pointer hover:bg-slate-50"
+                onClick={() => handleSort('createdAt')}
+              >
+                <div className="flex items-center">
+                  创建时间 <SortIcon field="createdAt" />
+                </div>
+              </TableHead>
+              <TableHead className="text-right">操作</TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {filteredAndSortedArticles.length === 0 ? (
+              <TableRow>
+                <TableCell colSpan={7} className="h-24 text-center text-slate-500">
+                  暂无匹配文章
+                </TableCell>
+              </TableRow>
+            ) : (
+              filteredAndSortedArticles.map((article) => (
+                <TableRow key={article.id}>
+                  {/* 封面 */}
+                  <TableCell>
+                    {article.coverImageUrl ? (
+                      <div className="h-10 w-16 overflow-hidden rounded border bg-slate-100 relative">
+                        {/* eslint-disable-next-line @next/next/no-img-element */}
+                        <img
+                          src={
+                            article.coverImageUrl.startsWith('http')
+                              ? article.coverImageUrl
+                              : `${process.env.NEXT_PUBLIC_API_BASE_URL}${article.coverImageUrl}`
+                          }
+                          alt="Cover"
+                          className="h-full w-full object-cover"
+                        />
+                      </div>
+                    ) : (
+                      <div className="h-10 w-16 rounded border bg-slate-50 flex items-center justify-center text-[10px] text-slate-300">
+                        无封面
+                      </div>
+                    )}
+                  </TableCell>
 
-      {loading ? (
-        <p className="text-sm text-gray-500">加载中…</p>
-      ) : (
-        <div className="overflow-hidden rounded-lg border border-gray-200 bg-white">
-          <table className="min-w-full divide-y divide-gray-200">
-            <thead className="bg-gray-50">
-              <tr>
-                <th className="px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500">
-                  ID
-                </th>
-                <th className="px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500">
-                  置顶
-                </th>
-                <th className="px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500">
-                  封面
-                </th>
-                <th
-                  className="cursor-pointer select-none px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500"
-                  onClick={() => handleSortClick('title')}
-                >
-                  标题 / 摘要{renderSortIndicator('title')}
-                </th>
-                <th className="px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500">
-                  SLUG
-                </th>
-                <th className="px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500">
-                  状态
-                </th>
-                <th
-                  className="cursor-pointer select-none px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500"
-                  onClick={() => handleSortClick('viewCount')}
-                >
-                  浏览量{renderSortIndicator('viewCount')}
-                </th>
-                <th
-                  className="cursor-pointer select-none px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500"
-                  onClick={() => handleSortClick('createdAt')}
-                >
-                  创建时间{renderSortIndicator('createdAt')}
-                </th>
-                <th
-                  className="cursor-pointer select-none px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500"
-                  onClick={() => handleSortClick('publishedAt')}
-                >
-                  发布时间{renderSortIndicator('publishedAt')}
-                </th>
-                <th className="px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500">
-                  操作
-                </th>
-              </tr>
-            </thead>
-
-            <tbody className="divide-y divide-gray-200 bg-white">
-              {filteredAndSorted.map((article) => {
-                const resolvedCoverUrl = article.coverImageUrl
-                  ? article.coverImageUrl.startsWith('http')
-                    ? article.coverImageUrl
-                    : `${API_BASE}${article.coverImageUrl}`
-                  : null;
-                return (
-                  <tr key={article.id}>
-                    <td className="px-4 py-3 text-sm text-gray-500">{article.id}</td>
-
-                    <td className="px-4 py-3 text-sm">
-                      <button
-                        type="button"
-                        onClick={() => handleTogglePin(article.id, article.isPinned)}
-                        className={classNames(
-                          'rounded-full border px-3 py-1 text-xs',
-                          article.isPinned
-                            ? 'border-amber-400 bg-amber-50 text-amber-700'
-                            : 'border-gray-300 text-gray-600 hover:border-gray-400',
+                  {/* 标题 & 置顶 */}
+                  <TableCell>
+                    <div className="flex flex-col gap-1">
+                      <div className="flex items-center gap-2 font-medium">
+                        {article.isPinned && (
+                          <Badge
+                            variant="outline"
+                            className="border-amber-500 text-amber-600 bg-amber-50 px-1 py-0 text-[10px] h-5"
+                          >
+                            置顶
+                          </Badge>
                         )}
-                      >
-                        {article.isPinned ? '取消置顶' : '置顶'}
-                      </button>
-                    </td>
+                        <span className="truncate max-w-[200px]" title={article.title}>
+                          {article.title}
+                        </span>
+                      </div>
+                      <div className="text-xs text-slate-400">ID: {article.id}</div>
+                    </div>
+                  </TableCell>
 
-                    <td className="px-4 py-3">
-                      {resolvedCoverUrl ? (
-                        <div className="h-12 w-16 overflow-hidden rounded border border-gray-200 bg-gray-50">
-                          <img
-                            src={resolvedCoverUrl}
-                            alt={article.title}
-                            className="h-full w-full object-cover"
-                            loading="lazy"
-                          />
-                        </div>
-                      ) : (
-                        <span className="text-xs text-gray-400">无</span>
-                      )}
-                    </td>
+                  {/* Slug */}
+                  <TableCell className="font-mono text-xs text-slate-600">{article.slug}</TableCell>
 
-                    <td className="px-4 py-3">
-                      <Link
-                        href={`/articles/${article.slug}`}
-                        target="_blank"
-                        className="font-medium text-blue-600 hover:text-blue-800 hover:underline"
+                  {/* 状态 */}
+                  <TableCell>
+                    {article.status === 'published' ? (
+                      <Badge className="bg-green-600 hover:bg-green-700">已发布</Badge>
+                    ) : (
+                      <Badge variant="outline" className="text-slate-500">
+                        草稿
+                      </Badge>
+                    )}
+                  </TableCell>
+
+                  {/* 浏览量 */}
+                  <TableCell className="text-sm font-mono">{article.viewCount}</TableCell>
+
+                  {/* 时间 */}
+                  <TableCell className="text-xs text-slate-500">
+                    <div>发: {formatDateTime(article.publishedAt)}</div>
+                    <div>创: {formatDateTime(article.createdAt)}</div>
+                  </TableCell>
+
+                  {/* 操作 */}
+                  <TableCell className="text-right">
+                    <div className="flex items-center justify-end gap-1">
+                      {/* 置顶按钮 */}
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        className="h-8 w-8 text-slate-400 hover:text-amber-600"
+                        title={article.isPinned ? '取消置顶' : '置顶文章'}
+                        onClick={() => handleTogglePin(article.id, article.isPinned)}
+                        disabled={pinMutation.isPending}
                       >
-                        {article.title}
+                        {article.isPinned ? (
+                          <PinOff className="h-4 w-4" />
+                        ) : (
+                          <Pin className="h-4 w-4" />
+                        )}
+                      </Button>
+
+                      {/* 编辑按钮 */}
+                      <Link href={`/articles/admin/${article.id}/edit`}>
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          className="h-8 w-8 text-slate-500 hover:text-blue-600"
+                        >
+                          <Edit className="h-4 w-4" />
+                        </Button>
                       </Link>
-                      {article.summary && (
-                        <div className="mt-1 line-clamp-1 text-xs text-gray-500">
-                          {article.summary}
-                        </div>
-                      )}
-                    </td>
 
-                    <td className="px-4 py-3 text-sm text-gray-600">{article.slug}</td>
-
-                    <td className="px-4 py-3 text-sm">
-                      {article.status === 'published' ? (
-                        <span className="inline-flex rounded-full bg-emerald-50 px-2.5 py-0.5 text-xs font-medium text-emerald-700">
-                          已发布
-                        </span>
-                      ) : (
-                        <span className="inline-flex rounded-full bg-gray-100 px-2.5 py-0.5 text-xs font-medium text-gray-600">
-                          草稿
-                        </span>
-                      )}
-                    </td>
-
-                    <td className="px-4 py-3 text-sm text-gray-700">{article.viewCount ?? 0}</td>
-
-                    <td className="px-4 py-3 text-sm text-gray-600">
-                      {formatDateTime(article.createdAt)}
-                    </td>
-
-                    <td className="px-4 py-3 text-sm text-gray-600">
-                      {formatDateTime(article.publishedAt)}
-                    </td>
-
-                    <td className="space-x-3 px-4 py-3 text-sm">
-                      <button
-                        type="button"
-                        onClick={() => handleEdit(article.id)}
-                        className="text-blue-600 hover:underline"
-                      >
-                        编辑
-                      </button>
-                      <button
-                        type="button"
+                      {/* 删除按钮 */}
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        className="h-8 w-8 text-slate-400 hover:text-red-600 hover:bg-red-50"
                         onClick={() => handleDelete(article.id)}
-                        className="text-red-500 hover:underline"
+                        disabled={deleteMutation.isPending}
                       >
-                        删除
-                      </button>
-                    </td>
-                  </tr>
-                );
-              })}
-
-              {!filteredAndSorted.length && (
-                <tr>
-                  <td colSpan={10} className="px-4 py-6 text-center text-sm text-gray-500">
-                    当前没有符合条件的文章。
-                  </td>
-                </tr>
-              )}
-            </tbody>
-          </table>
-        </div>
-      )}
-    </main>
+                        {deleteMutation.isPending ? (
+                          <Loader2 className="h-4 w-4 animate-spin" />
+                        ) : (
+                          <Trash2 className="h-4 w-4" />
+                        )}
+                      </Button>
+                    </div>
+                  </TableCell>
+                </TableRow>
+              ))
+            )}
+          </TableBody>
+        </Table>
+      </div>
+    </div>
   );
 }

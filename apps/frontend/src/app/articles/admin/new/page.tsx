@@ -1,463 +1,367 @@
 // apps/frontend/src/app/articles/admin/new/page.tsx
+
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useState, useRef } from 'react';
 import { useRouter } from 'next/navigation';
-import Link from 'next/link';
+import { useForm } from 'react-hook-form';
+import { zodResolver } from '@hookform/resolvers/zod';
+import * as z from 'zod';
+import { Loader2, Save, Upload, Image as ImageIcon, ArrowLeft } from 'lucide-react';
+import { apiClient } from '@/lib/api-client';
+import { Button } from '@/components/ui/button';
+import {
+  Form,
+  FormControl,
+  FormDescription,
+  FormField,
+  FormItem,
+  FormLabel,
+  FormMessage,
+} from '@/components/ui/form';
+import { Input } from '@/components/ui/input';
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select';
+import { Textarea } from '@/components/ui/textarea';
+import { Checkbox } from '@/components/ui/checkbox';
+import { toast } from 'sonner';
 
-type ArticleStatus = 'draft' | 'published';
-
-interface CreateArticlePayload {
-  title: string;
-  slug: string;
-  summary: string;
-  content: string;
-  status: ArticleStatus;
-  isPinned: boolean;
-  // 新增：封面图 URL（前端用 string，提交前会做 trim）
-  coverImageUrl: string;
-}
-
-// 上传接口使用的后端基础地址
-const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL || 'http://localhost:3001';
-
-async function readApiErrorMessage(res: Response) {
-  try {
-    const data = await res.json();
-    const msg = (data as any)?.message;
-    if (typeof msg === 'string' && msg.trim()) return msg.trim();
-    if (Array.isArray(msg) && msg.length) return msg.join('; ');
-    if (typeof (data as any)?.error === 'string' && (data as any).error.trim())
-      return (data as any).error.trim();
-  } catch {
-    // ignore
-  }
-  return `请求失败（HTTP ${res.status}）`;
-}
+// Zod Schema
+const articleSchema = z.object({
+  title: z.string().min(1, '标题不能为空'),
+  slug: z
+    .string()
+    .min(1, 'Slug 不能为空')
+    .regex(/^[a-z0-9-]+$/, 'Slug 只能包含小写字母、数字和连字符'),
+  summary: z.string().optional(),
+  content: z.string().optional(),
+  coverImageUrl: z.string().optional(),
+  status: z.enum(['draft', 'published']),
+  isPinned: z.boolean().default(false),
+});
 
 export default function NewArticlePage() {
   const router = useRouter();
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [isUploading, setIsUploading] = useState(false);
+  const [imgError, setImgError] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
-  const [form, setForm] = useState<CreateArticlePayload>({
-    title: '',
-    slug: '',
-    summary: '',
-    content: '',
-    status: 'published',
-    isPinned: false,
-    coverImageUrl: '',
+  // [修改] 移除泛型，让 hook 自动推断
+  const form = useForm({
+    resolver: zodResolver(articleSchema),
+    defaultValues: {
+      title: '',
+      slug: '',
+      summary: '',
+      content: '',
+      coverImageUrl: '',
+      status: 'published',
+      isPinned: false,
+    },
   });
 
-  const [submitting, setSubmitting] = useState(false);
-  const [uploadingCover, setUploadingCover] = useState(false);
-  const [uploadError, setUploadError] = useState<string | null>(null);
-  const [errorMsg, setErrorMsg] = useState<string | null>(null);
-
-  // ====== 前端只允许 admin 访问 ======
-  const [checkedAuth, setCheckedAuth] = useState(false);
-  const [isAdmin, setIsAdmin] = useState(false);
-
-  useEffect(() => {
-    if (typeof window === 'undefined') return;
-
-    let cancelled = false;
-
-    (async () => {
-      try {
-        const res = await fetch(`${API_BASE}/auth/me`, {
-          method: 'GET',
-          credentials: 'include',
-          cache: 'no-store',
-        });
-
-        if (!res.ok) {
-          // 未登录/登录失效：跳转登录，让用户重新获取 cookie
-          if (res.status === 401 || res.status === 403) {
-            if (!cancelled) {
-              setIsAdmin(false);
-              setCheckedAuth(true);
-            }
-            router.replace('/login?redirect=/articles/admin/new');
-            return;
-          }
-
-          // 其他异常：仍按非管理员处理（伪 404）
-          if (!cancelled) {
-            setIsAdmin(false);
-            setCheckedAuth(true);
-          }
-          return;
-        }
-
-        const me = (await res.json()) as { role?: string };
-        if (!cancelled) {
-          setIsAdmin(me?.role === 'admin');
-          setCheckedAuth(true);
-        }
-      } catch {
-        if (!cancelled) {
-          setIsAdmin(false);
-          setCheckedAuth(true);
-        }
-      }
-    })();
-
-    return () => {
-      cancelled = true;
-    };
-  }, [router]);
-
-  // 还在检测本地登录信息时
-  if (!checkedAuth) {
-    return (
-      <main className="mx-auto max-w-3xl px-4 py-10">
-        <p className="text-sm text-gray-500">正在检查登录状态…</p>
-      </main>
-    );
-  }
-
-  // 检查完发现不是管理员账号：前端伪装为 404，不暴露后台入口
-  if (!isAdmin) {
-    return (
-      <main className="mx-auto max-w-3xl px-4 py-16">
-        <h1 className="mb-4 text-3xl font-bold tracking-tight">404 页面不存在</h1>
-        <p className="mb-6 text-sm text-gray-600">您访问的页面不存在。</p>
-        <Link
-          href="/"
-          className="inline-flex items-center rounded-md bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700"
-        >
-          返回首页
-        </Link>
-      </main>
-    );
-  }
-
-  // ====== 新建文章表单逻辑 ======
-
-  function handleChange(e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) {
-    const { name, value } = e.target;
-    setForm((prev) => ({ ...prev, [name]: value }));
-  }
-
-  async function handleCoverFileChange(e: React.ChangeEvent<HTMLInputElement>) {
+  // 图片上传逻辑
+  const handleFileSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
 
-    setUploadError(null);
-
     if (!file.type.startsWith('image/')) {
-      setUploadError('请选择图片文件。');
-      (e.target as HTMLInputElement).value = '';
+      toast.error('请选择图片文件');
       return;
     }
 
-    setUploadingCover(true);
+    setIsUploading(true);
+    const formData = new FormData();
+    formData.append('file', file);
 
     try {
-      const formData = new FormData();
-      // 字段名 file 要和后端 FileInterceptor('file') 对应
-      formData.append('file', file);
-
-      // 使用 httpOnly cookie 鉴权
-      const res = await fetch(`${API_BASE}/admin/uploads/article-cover`, {
+      const baseUrl = process.env.NEXT_PUBLIC_API_BASE_URL || 'http://localhost:3001';
+      const res = await fetch(`${baseUrl}/admin/uploads/article-cover`, {
         method: 'POST',
-        credentials: 'include',
         body: formData,
-      });
-
-      if (res.status === 401 || res.status === 403) {
-        setUploadError('当前登录状态已失效或无权限，请重新登录管理员账号后再上传封面图。');
-        router.push('/login?redirect=/articles/admin/new');
-        return;
-      }
-
-      if (!res.ok) {
-        // 尝试读后端错误信息
-        let serverMsg: string | null = null;
-        try {
-          const errJson = (await res.json()) as any;
-          if (errJson && typeof errJson === 'object') {
-            if (typeof errJson.message === 'string') serverMsg = errJson.message;
-            else if (Array.isArray(errJson.message) && typeof errJson.message[0] === 'string') {
-              serverMsg = errJson.message[0];
-            }
-          }
-        } catch {
-          // ignore
-        }
-
-        setUploadError(serverMsg || '上传封面图失败，请稍后重试。');
-        return;
-      }
-
-      const data = (await res.json()) as { url?: string; path?: string };
-
-      let stored = '';
-      if (data && typeof data === 'object') {
-        if (typeof data.url === 'string') stored = data.url.trim();
-        else if (typeof data.path === 'string') stored = data.path.trim();
-      }
-
-      if (!stored) {
-        setUploadError('上传成功，但未收到图片地址，请稍后重试。');
-        return;
-      }
-
-      setForm((prev) => ({
-        ...prev,
-        coverImageUrl: stored,
-      }));
-    } catch {
-      setUploadError('上传封面图失败，请稍后重试。');
-    } finally {
-      setUploadingCover(false);
-      // 清空 input 的值，方便再次选择同一文件
-      (e.target as HTMLInputElement).value = '';
-    }
-  }
-
-  async function handleSubmit(e: React.FormEvent) {
-    e.preventDefault();
-    setErrorMsg(null);
-
-    // 极简校验：标题和 slug 必填
-    if (!form.title.trim()) {
-      setErrorMsg('请输入文章标题');
-      return;
-    }
-    if (!form.slug.trim()) {
-      setErrorMsg('请输入 SLUG（URL 片段）');
-      return;
-    }
-
-    // 提交前做一次简单的 trim，避免多余空格
-    const payload: CreateArticlePayload = {
-      ...form,
-      title: form.title.trim(),
-      slug: form.slug.trim(),
-      summary: form.summary.trim(),
-      coverImageUrl: form.coverImageUrl.trim(),
-      // content 允许保留前后空格
-    };
-
-    setSubmitting(true);
-    try {
-      const res = await fetch(`${API_BASE}/admin/articles`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
         credentials: 'include',
-        body: JSON.stringify(payload),
       });
 
-      if (res.status === 401 || res.status === 403) {
-        setErrorMsg('创建失败：当前登录已过期或无权限，请重新登录管理员账号后再尝试创建。');
-        router.push('/login?redirect=/articles/admin/new');
-        return;
-      }
-
-      if (res.status === 409) {
-        const msg = await readApiErrorMessage(res);
-        setErrorMsg(msg && msg.trim() ? msg : 'SLUG 已存在，请提供一个新的 SLUG。');
-        return;
-      }
-
       if (!res.ok) {
-        const msg = await readApiErrorMessage(res);
-        setErrorMsg(msg || '创建失败，请稍后重试。');
-        return;
+        if (res.status === 413) {
+          throw new Error('文件过大，请上传不超过 5MB 的图片');
+        }
+        const errorData = await res.json().catch(() => ({}));
+        const serverMsg = errorData.message;
+        const displayMsg = Array.isArray(serverMsg) ? serverMsg.join(', ') : serverMsg;
+        throw new Error(displayMsg || '上传失败');
       }
 
-      // 成功后跳回后台列表页
-      router.push('/articles/admin');
-    } catch {
-      setErrorMsg('创建失败，请稍后重试。');
+      const data = await res.json();
+      form.setValue('coverImageUrl', data.url);
+      setImgError(false);
+      toast.success('图片上传成功');
+    } catch (error: any) {
+      console.error(error);
+      toast.error(error.message || '图片上传失败，请重试');
     } finally {
-      setSubmitting(false);
+      setIsUploading(false);
+      if (fileInputRef.current) fileInputRef.current.value = '';
     }
-  }
+  };
 
-  const resolvedCoverPreviewUrl = form.coverImageUrl
-    ? form.coverImageUrl.startsWith('http')
-      ? form.coverImageUrl
-      : `${API_BASE}${form.coverImageUrl}`
-    : '';
+  // [修改] 参数设为 any
+  const onSubmit = async (values: any) => {
+    setIsSubmitting(true);
+    try {
+      // 数据清洗
+      const payload = { ...values };
+      if (!payload.coverImageUrl || payload.coverImageUrl.trim() === '') {
+        delete payload.coverImageUrl;
+      }
+
+      await apiClient.post('/admin/articles', payload);
+
+      toast.success('文章创建成功');
+      router.push('/articles/admin');
+    } catch (error: any) {
+      const msg = error.response?.data?.message || error.message || '创建失败';
+      toast.error(`操作失败: ${Array.isArray(msg) ? msg.join(', ') : msg}`);
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
 
   return (
-    <main className="mx-auto max-w-3xl px-4 py-10">
-      <p className="mb-4 text-sm text-blue-700">
-        <Link href="/articles/admin" className="underline underline-offset-2">
-          返回后台文章列表
-        </Link>
-      </p>
+    <div className="container mx-auto py-10 max-w-3xl space-y-8">
+      {/* 顶部导航 */}
+      <div className="flex items-center gap-4">
+        <Button variant="ghost" size="sm" onClick={() => router.push('/articles/admin')}>
+          <ArrowLeft className="mr-2 h-4 w-4" /> 返回列表
+        </Button>
+        <h1 className="text-2xl font-bold">新建文章</h1>
+      </div>
 
-      <h1 className="mb-4 text-2xl font-bold tracking-tight">新建文章</h1>
-      <p className="mb-6 text-sm text-gray-600">
-        这一版先做最简单的字段：标题、slug、摘要、正文。状态默认“已发布”，后续我们再加草稿、分类等功能。
-      </p>
-
-      <form
-        onSubmit={handleSubmit}
-        className="space-y-4 rounded-xl border border-gray-200 bg-white p-4"
-      >
-        {/* 标题 */}
-        <div>
-          <label className="mb-1 block text-sm font-medium text-gray-700">文章标题</label>
-          <input
-            type="text"
-            name="title"
-            value={form.title}
-            onChange={handleChange}
-            className="block w-full rounded-md border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
-            placeholder="例如：2026 年加拿大 EE 新政解读"
-          />
-        </div>
-
-        {/* slug */}
-        <div>
-          <label className="mb-1 block text-sm font-medium text-gray-700">Slug（URL 片段）</label>
-          <input
-            type="text"
-            name="slug"
-            value={form.slug}
-            onChange={handleChange}
-            className="block w-full rounded-md border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
-            placeholder="例如：ee-2026-policy-overview"
-          />
-          <p className="mt-1 text-xs text-gray-500">
-            访问链接会是：/articles/&lt;slug&gt;，例如 /articles/ee-2026-policy-overview。
-          </p>
-        </div>
-
-        {/* 封面图 URL（选填） */}
-        <div>
-          <label className="mb-1 block text-sm font-medium text-gray-700">封面图 URL（选填）</label>
-          <input
-            type="text"
-            name="coverImageUrl"
-            value={form.coverImageUrl}
-            onChange={handleChange}
-            className="block w-full rounded-md border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
-            placeholder="例如：/uploads/article-covers/xxxx.jpg 或完整的 https:// 链接"
-          />
-          <p className="mt-1 text-xs text-gray-500">
-            可以直接填写完整可访问的图片 URL，或后台上传接口返回的相对路径（例如
-            /uploads/article-covers/xxx.jpg）。前台列表和详情页会优先使用该图片。
-          </p>
-
-          <div className="mt-2 flex flex-wrap items-center gap-3 text-xs">
-            {/* 隐藏的文件选择框 */}
-            <input
-              id="cover-file-input"
-              type="file"
-              accept="image/*"
-              className="hidden"
-              onChange={handleCoverFileChange}
+      <div className="rounded-xl border bg-white p-6 shadow-sm">
+        <Form {...form}>
+          <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-6">
+            {/* 标题 */}
+            <FormField
+              control={form.control}
+              name="title"
+              render={({ field }) => (
+                <FormItem>
+                  <FormLabel>
+                    文章标题 <span className="text-red-500">*</span>
+                  </FormLabel>
+                  <FormControl>
+                    <Input placeholder="输入文章标题..." {...field} value={field.value as string} />
+                  </FormControl>
+                  <FormMessage />
+                </FormItem>
+              )}
             />
 
-            {/* 触发选择文件的按钮 */}
-            <button
-              type="button"
-              onClick={() => {
-                const input = document.getElementById(
-                  'cover-file-input',
-                ) as HTMLInputElement | null;
-                if (input) input.click();
-              }}
-              className="inline-flex items-center rounded-md border border-gray-300 px-3 py-1.5 text-xs font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-60"
-              disabled={uploadingCover}
-            >
-              {uploadingCover ? '上传中…' : '从本地上传图片'}
-            </button>
+            {/* Slug */}
+            <FormField
+              control={form.control}
+              name="slug"
+              render={({ field }) => (
+                <FormItem>
+                  <FormLabel>
+                    Slug (URL 片段) <span className="text-red-500">*</span>
+                  </FormLabel>
+                  <FormControl>
+                    <Input
+                      placeholder="example-article-slug"
+                      {...field}
+                      value={field.value as string}
+                    />
+                  </FormControl>
+                  <FormDescription>仅允许小写字母、数字和连字符。</FormDescription>
+                  <FormMessage />
+                </FormItem>
+              )}
+            />
 
-            {uploadError && <span className="text-red-500">{uploadError}</span>}
-          </div>
+            {/* 封面图片 */}
+            <FormField
+              control={form.control}
+              name="coverImageUrl"
+              render={({ field }) => (
+                <FormItem>
+                  <FormLabel>封面图片</FormLabel>
+                  <div className="space-y-3">
+                    <FormControl>
+                      <Input
+                        placeholder="https://..."
+                        {...field}
+                        value={field.value as string}
+                        onChange={(e) => {
+                          field.onChange(e);
+                          setImgError(false);
+                        }}
+                      />
+                    </FormControl>
+                    <div>
+                      <input
+                        type="file"
+                        className="hidden"
+                        ref={fileInputRef}
+                        accept="image/*"
+                        onChange={handleFileSelect}
+                      />
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        onClick={() => fileInputRef.current?.click()}
+                        className="w-full sm:w-auto"
+                        disabled={isUploading}
+                      >
+                        {isUploading ? (
+                          <>
+                            <Loader2 className="mr-2 h-4 w-4 animate-spin" /> 上传中...
+                          </>
+                        ) : (
+                          <>
+                            <Upload className="mr-2 h-4 w-4" /> 本地上传
+                          </>
+                        )}
+                      </Button>
+                    </div>
+                  </div>
 
-          {resolvedCoverPreviewUrl && (
-            <div className="mt-3">
-              <p className="mb-1 text-xs text-gray-500">封面预览：</p>
-              {/* eslint-disable-next-line @next/next/no-img-element */}
-              <img
-                src={resolvedCoverPreviewUrl}
-                alt="封面预览"
-                className="h-32 w-56 rounded-md border object-cover"
+                  {field.value && (
+                    <div className="mt-3 w-full h-48 bg-slate-100 rounded-md overflow-hidden border flex items-center justify-center relative">
+                      {!imgError ? (
+                        // eslint-disable-next-line @next/next/no-img-element
+                        <img
+                          src={
+                            (field.value as string).startsWith('http')
+                              ? (field.value as string)
+                              : `${process.env.NEXT_PUBLIC_API_BASE_URL}${field.value}`
+                          }
+                          alt="Preview"
+                          className="w-full h-full object-cover"
+                          onError={() => setImgError(true)}
+                        />
+                      ) : (
+                        <div className="flex flex-col items-center text-slate-400 gap-2">
+                          <ImageIcon className="h-8 w-8" />
+                          <span className="text-sm text-red-400">预览失败，请输入正确的 URL</span>
+                        </div>
+                      )}
+                    </div>
+                  )}
+                  <FormMessage />
+                </FormItem>
+              )}
+            />
+
+            {/* 摘要 */}
+            <FormField
+              control={form.control}
+              name="summary"
+              render={({ field }) => (
+                <FormItem>
+                  <FormLabel>摘要</FormLabel>
+                  <FormControl>
+                    <Textarea
+                      placeholder="文章简短摘要..."
+                      className="resize-none"
+                      {...field}
+                      value={(field.value as string) || ''}
+                    />
+                  </FormControl>
+                  <FormMessage />
+                </FormItem>
+              )}
+            />
+
+            {/* 正文 */}
+            <FormField
+              control={form.control}
+              name="content"
+              render={({ field }) => (
+                <FormItem>
+                  <FormLabel>正文内容</FormLabel>
+                  <FormControl>
+                    <Textarea
+                      className="h-64"
+                      placeholder="在此输入文章内容..."
+                      {...field}
+                      value={(field.value as string) || ''}
+                    />
+                  </FormControl>
+                  <FormMessage />
+                </FormItem>
+              )}
+            />
+
+            {/* 状态与置顶 - 并排布局 */}
+            <div className="flex flex-col sm:flex-row gap-6">
+              <FormField
+                control={form.control}
+                name="status"
+                render={({ field }) => (
+                  <FormItem className="flex-1">
+                    <FormLabel>状态</FormLabel>
+                    <Select onValueChange={field.onChange} defaultValue={field.value as string}>
+                      <FormControl>
+                        <SelectTrigger>
+                          <SelectValue />
+                        </SelectTrigger>
+                      </FormControl>
+                      <SelectContent>
+                        <SelectItem value="published">已发布</SelectItem>
+                        <SelectItem value="draft">草稿</SelectItem>
+                      </SelectContent>
+                    </Select>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
+
+              <FormField
+                control={form.control}
+                name="isPinned"
+                render={({ field }) => (
+                  <FormItem className="flex flex-row items-start space-x-3 space-y-0 rounded-md border p-4 shadow-sm sm:mt-8">
+                    <FormControl>
+                      <Checkbox checked={field.value as boolean} onCheckedChange={field.onChange} />
+                    </FormControl>
+                    <div className="space-y-1 leading-none">
+                      <FormLabel>置顶</FormLabel>
+                    </div>
+                  </FormItem>
+                )}
               />
             </div>
-          )}
-        </div>
 
-        {/* 摘要 */}
-        <div>
-          <label className="mb-1 block text-sm font-medium text-gray-700">摘要（列表页显示）</label>
-          <textarea
-            name="summary"
-            value={form.summary}
-            onChange={handleChange}
-            rows={2}
-            className="block w-full rounded-md border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
-            placeholder="简单说明本文在讲什么，1～3 句话即可。"
-          />
-        </div>
-
-        {/* 正文 */}
-        <div>
-          <label className="mb-1 block text-sm font-medium text-gray-700">正文内容</label>
-          <textarea
-            name="content"
-            value={form.content}
-            onChange={handleChange}
-            rows={8}
-            className="block w-full rounded-md border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
-            placeholder="这里先用纯文本写内容，后面有需要再换成富文本编辑器。"
-          />
-        </div>
-
-        {/* 状态和置顶 */}
-        <div className="flex flex-wrap items-center gap-4 text-sm">
-          <div className="flex items-center gap-2">
-            <span className="text-gray-700">状态：</span>
-            <select
-              name="status"
-              value={form.status}
-              onChange={(e) =>
-                setForm((prev) => ({
-                  ...prev,
-                  status: e.target.value as ArticleStatus,
-                }))
-              }
-              className="rounded-md border border-gray-300 px-2 py-1 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
-            >
-              <option value="published">已发布</option>
-              <option value="draft">草稿</option>
-            </select>
-          </div>
-
-          <label className="flex items-center gap-2 text-sm text-gray-700">
-            <input
-              type="checkbox"
-              checked={form.isPinned}
-              onChange={(e) => setForm((prev) => ({ ...prev, isPinned: e.target.checked }))}
-              className="h-4 w-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500"
-            />
-            置顶显示
-          </label>
-        </div>
-
-        {/* 错误信息 */}
-        {errorMsg && <p className="text-sm text-red-600">{errorMsg}</p>}
-
-        {/* 提交按钮 */}
-        <div className="pt-2">
-          <button
-            type="submit"
-            disabled={submitting || uploadingCover}
-            className="inline-flex items-center rounded-md bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-60"
-          >
-            {submitting ? '提交中…' : '保存文章'}
-          </button>
-        </div>
-      </form>
-    </main>
+            {/* 底部按钮 */}
+            <div className="flex justify-end gap-4 pt-4 border-t">
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() => router.back()}
+                disabled={isSubmitting}
+              >
+                取消
+              </Button>
+              <Button type="submit" disabled={isSubmitting}>
+                {isSubmitting ? (
+                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                ) : (
+                  <Save className="mr-2 h-4 w-4" />
+                )}
+                保存文章
+              </Button>
+            </div>
+          </form>
+        </Form>
+      </div>
+    </div>
   );
 }

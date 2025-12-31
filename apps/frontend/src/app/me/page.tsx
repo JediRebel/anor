@@ -6,7 +6,9 @@ import { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 
-import { getApiBaseUrl, type AuthUser } from '@/lib/api/auth';
+import { type AuthUser } from '@/lib/api/auth';
+import { apiClient } from '@/lib/api-client'; // ✅ [修改] 引入封装好的 apiClient
+import { useAuth } from '@/components/auth-provider';
 
 type MyCourseListItemDto = {
   courseId: string;
@@ -17,40 +19,15 @@ type MyCourseListItemDto = {
   enrolledAt: string;
 };
 
+// ✅ [修改] 使用 apiClient 替代原生 fetch
 async function fetchCurrentUser(): Promise<AuthUser> {
-  const baseUrl = getApiBaseUrl();
-
-  const res = await fetch(`${baseUrl}/auth/me`, {
-    method: 'GET',
-    credentials: 'include',
-    cache: 'no-store',
-  });
-
-  if (!res.ok) {
-    const err: any = new Error('Failed to load /auth/me');
-    err.status = res.status;
-    throw err;
-  }
-
-  return (await res.json()) as AuthUser;
+  // apiClient 会自动处理 baseURL 和 credentials，也会自动处理 401 刷新
+  return apiClient.get<AuthUser>('/auth/me');
 }
 
+// ✅ [修改] 使用 apiClient 替代原生 fetch
 async function getMyCourses(): Promise<MyCourseListItemDto[]> {
-  const baseUrl = getApiBaseUrl();
-
-  const res = await fetch(`${baseUrl}/me/courses`, {
-    method: 'GET',
-    credentials: 'include',
-    cache: 'no-store',
-  });
-
-  if (!res.ok) {
-    const err: any = new Error('Failed to load /me/courses');
-    err.status = res.status;
-    throw err;
-  }
-
-  return (await res.json()) as MyCourseListItemDto[];
+  return apiClient.get<MyCourseListItemDto[]>('/me/courses');
 }
 
 type MeState =
@@ -70,7 +47,9 @@ export default function MePage() {
   const [activeTab, setActiveTab] = useState<MeTabKey>('courses');
   const router = useRouter();
 
-  // 账户安全：改密码（httpOnly cookie 鉴权，前端只负责提交表单）
+  const { refresh } = useAuth();
+
+  // 账户安全：改密码
   const [currentPassword, setCurrentPassword] = useState('');
   const [newPassword, setNewPassword] = useState('');
   const [confirmNewPassword, setConfirmNewPassword] = useState('');
@@ -86,9 +65,9 @@ export default function MePage() {
 
     async function loadMe() {
       try {
-        // httpOnly cookie 鉴权（当前方案）：只信 cookie，不使用前端本地令牌
-        const user = await fetchCurrentUser();
-        const courses = await getMyCourses();
+        // 并行加载用户和课程数据
+        // 如果 401，apiClient 内部会尝试刷新一次。如果还是 401，这里会抛错
+        const [user, courses] = await Promise.all([fetchCurrentUser(), getMyCourses()]);
 
         if (!cancelled) {
           setState({
@@ -102,7 +81,7 @@ export default function MePage() {
 
         const status: number | undefined = err?.status ?? err?.response?.status;
 
-        // 未登录或登录已失效
+        // 真正的未登录（RT也过期了，或者压根没登录）
         if (status === 401 || status === 403) {
           setState({ status: 'not-logged-in' });
           router.replace('/login?redirect=/me');
@@ -124,40 +103,23 @@ export default function MePage() {
     };
   }, [router]);
 
-  // 未登录或仍在加载时，不渲染任何内容（同时 useEffect 会负责跳转到 /login）
+  // 未登录或仍在加载时，不渲染任何内容（避免闪烁）
   if (state.status === 'loading' || state.status === 'not-logged-in') {
     return null;
   }
 
   const handleLogout = async () => {
     try {
-      const baseUrl = getApiBaseUrl();
-      await fetch(`${baseUrl}/auth/logout`, {
-        method: 'POST',
-        credentials: 'include',
-      });
+      // ✅ [修改] 使用 apiClient 退出
+      await apiClient.post('/auth/logout');
     } catch {
-      // 忽略错误：即便后端暂时不可用，也继续跳转到登录页
+      // ignore
     } finally {
-      // 退出后立刻跳转到登录页，并刷新一次以让 Server Components（导航栏）按最新 cookie 重新渲染
+      await refresh();
       setState({ status: 'not-logged-in' });
       router.replace('/login');
       router.refresh();
     }
-  };
-
-  const readApiErrorMessage = async (res: Response) => {
-    try {
-      const data = await res.json();
-      const msg = (data as any)?.message;
-      if (typeof msg === 'string' && msg.trim()) return msg.trim();
-      if (Array.isArray(msg) && msg.length) return msg.join('; ');
-      if (typeof (data as any)?.error === 'string' && (data as any).error.trim())
-        return (data as any).error.trim();
-    } catch {
-      // ignore
-    }
-    return `请求失败（HTTP ${res.status}）`;
   };
 
   const handleChangePassword = async () => {
@@ -188,62 +150,41 @@ export default function MePage() {
     setChangingPassword(true);
 
     try {
-      const baseUrl = getApiBaseUrl();
-
-      // 约定接口：POST /auth/change-password
-      // body: { currentPassword, newPassword }
-      // 鉴权：通过 httpOnly cookie（credentials: 'include'）
-      const res = await fetch(`${baseUrl}/auth/change-password`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        credentials: 'include',
-        body: JSON.stringify({
-          currentPassword: cur,
-          newPassword: next,
-        }),
+      // ✅ [修改] 使用 apiClient 修改密码
+      await apiClient.post('/auth/change-password', {
+        currentPassword: cur,
+        newPassword: next,
       });
-
-      if (!res.ok) {
-        // 登录失效：跳回登录页
-        if (res.status === 401 || res.status === 403) {
-          setState({ status: 'not-logged-in' });
-          router.replace('/login?redirect=/me');
-          return;
-        }
-
-        const msg = await readApiErrorMessage(res);
-        setPasswordMessage({ type: 'error', text: msg });
-        return;
-      }
 
       setCurrentPassword('');
       setNewPassword('');
       setConfirmNewPassword('');
 
-      // 改密成功后：提示用户重新登录。
-      // 注意：如果后端在改密后会让旧登录失效（或清 cookie），这里不要 router.refresh()/自动跳转，
-      // 否则页面会立即被 proxy 保护重定向，用户看不到成功提示。
       setPasswordMessage({ type: 'success', text: '密码修改成功。请重新登录后继续使用。' });
       setShowPasswordChangedNotice(true);
 
-      // 可选：主动调用 logout 清理 cookie，但不在这里跳转，让用户先看到提示
+      // 退出登录，但不跳转
       try {
-        await fetch(`${baseUrl}/auth/logout`, {
-          method: 'POST',
-          credentials: 'include',
-        });
+        await apiClient.post('/auth/logout');
       } catch {
         // ignore
       }
-    } catch (e) {
-      setPasswordMessage({ type: 'error', text: '改密码请求失败，请稍后重试。' });
+    } catch (e: any) {
+      // 如果 Token 在改密码过程中过期且无法刷新，会到这里
+      if (e?.status === 401 || e?.status === 403) {
+        setState({ status: 'not-logged-in' });
+        router.replace('/login?redirect=/me');
+        return;
+      }
+
+      const msg = e.message || '改密码请求失败，请稍后重试。';
+      setPasswordMessage({ type: 'error', text: msg });
     } finally {
       setChangingPassword(false);
     }
   };
 
+  // ... 后面的 JSX 渲染逻辑不用变 ...
   const headerSubtitle =
     state.status === 'ready'
       ? `${state.user.email}（ID: ${state.user.id}，角色: ${state.user.role === 'admin' ? 'admin' : 'user'}）`

@@ -13,7 +13,7 @@ export function AdminDashboardSection({ email }: AdminDashboardSectionProps) {
       <header className="mb-8 border-b pb-4">
         <h1 className="text-2xl font-bold tracking-tight">管理员控制面板</h1>
         <p className="mt-2 text-sm text-gray-600">
-          这里是后台总入口。您可以从这里进入文章管理，将来还可以扩展用户管理、课程管理、报表等功能。
+          这里是后台总入口。您可以从这里进入文章管理、课程管理等功能。
         </p>
         {email && (
           <p className="mt-1 text-xs text-gray-500">
@@ -54,6 +54,7 @@ export function AdminDashboardSection({ email }: AdminDashboardSectionProps) {
           </p>
 
           <div className="mt-4 flex flex-wrap gap-3">
+            {/* [修复] 链接指向正确的管理路由 */}
             <Link
               href="/courses/admin"
               className="inline-flex items-center rounded-full border border-gray-300 px-4 py-1.5 text-sm text-gray-800 hover:border-gray-400 hover:bg-gray-50"
@@ -67,10 +68,6 @@ export function AdminDashboardSection({ email }: AdminDashboardSectionProps) {
               新建课程
             </Link>
           </div>
-
-          <p className="mt-3 text-xs text-gray-400">
-            注：若你尚未实现课程后台页面，这两个入口会暂时 404；我们下一步会补齐对应页面。
-          </p>
         </div>
 
         {/* 预留扩展卡片 */}
@@ -82,9 +79,7 @@ export function AdminDashboardSection({ email }: AdminDashboardSectionProps) {
             · 用户管理（查看 / 冻结 / 调整角色）
             <br />· 收费与访问报表（订单统计、课程访问数据）
           </p>
-          <p className="mt-2 text-xs text-gray-400">
-            当前阶段仅启用文章管理功能，其余模块等业务准备好后再逐步接入。
-          </p>
+          <p className="mt-2 text-xs text-gray-400">当前阶段仅启用文章管理与课程管理功能。</p>
         </div>
       </section>
     </main>
