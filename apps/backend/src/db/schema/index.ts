@@ -6,6 +6,8 @@ import { lessons, lessonStatusEnum, lessonTypeEnum } from './lessons';
 import { enrollments } from './enrollments';
 // 注意：articles 暂时保持原来的导出方式，因为你还没有在 articles.ts 里定义 pgEnum
 import { categories, tags, articles, articleTags } from './articles';
+// 新增引入
+import { toolRecords } from './tool-records';
 
 // 1）导出各个表和 Enum
 export {
@@ -21,6 +23,8 @@ export {
   tags,
   articles,
   articleTags,
+  // 新增导出
+  toolRecords,
 };
 
 // 2）统一导出的 schema 对象
@@ -35,6 +39,8 @@ export const schema = {
   tags,
   articles,
   articleTags,
+  // 新增导出
+  toolRecords,
 };
 
 // 3）TypeScript 类型
@@ -58,3 +64,7 @@ export type NewLesson = typeof lessons.$inferInsert;
 
 export type Enrollment = typeof enrollments.$inferSelect;
 export type NewEnrollment = typeof enrollments.$inferInsert;
+
+// 新增工具记录类型
+export type DbToolRecord = typeof toolRecords.$inferSelect;
+export type NewDbToolRecord = typeof toolRecords.$inferInsert;

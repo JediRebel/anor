@@ -1,3 +1,4 @@
+-- apps/backend/drizzle/0005_first_mandroid.sql
 DO $$ BEGIN
   CREATE TYPE "course_access_type" AS ENUM ('free', 'paid');
 EXCEPTION

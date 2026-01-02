@@ -43,6 +43,13 @@
       "when": 1766701394572,
       "tag": "0005_first_mandroid",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1767204735440,
+      "tag": "0006_cuddly_adam_warlock",
+      "breakpoints": true
     }
   ]
 }
